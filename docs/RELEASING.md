@@ -76,3 +76,17 @@ git push origin vX.Y.Z
 | `.github/workflows/release-please.yml` | Release PR 運用 + マージ後の goreleaser 発火 |
 | `.goreleaser.yml` | バイナリ/deb ビルド。`release.mode: append` で既存 Release に添付 |
 | `deploy/terraform/VERSION` | `X.Y.Z # x-release-please-version`。terraform が `v` を前置して `?ref=` に使う |
+
+## リポジトリ設定(絞り戻さないこと)
+
+Settings → Actions → General:
+
+| 設定 | 値 | なぜ |
+|---|---|---|
+| Workflow permissions | **Read and write** | release-please が Release PR を作るのに要る |
+| Allow GitHub Actions to create and approve pull requests | **ON** | 同上 |
+
+**一度これを read に戻して再発させている。** 症状が分かりにくく、
+release ブランチの作成までは成功するのに **PR 作成だけが無言で失敗**する
+(ログのエラー本文も空)。「リリースのときだけ開ける」運用にすると、
+次のリリースで同じ場所に詰まる。
