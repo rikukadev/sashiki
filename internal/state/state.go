@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"syscall"
 	"time"
 
 	_ "modernc.org/sqlite" // pure Go SQLite driver
@@ -100,7 +103,45 @@ func Open(path string) (*DB, error) {
 	} {
 		_, _ = db.Exec(col)
 	}
+	alignOwner(path)
 	return &DB{sql: db}, nil
+}
+
+// alignOwner は作った DB ファイルを、置き場のディレクトリと同じ所有者に揃える。
+//
+// root で叩いた CLI(`sudo sashiki baseline import` 等)が state.db を先に作ると
+// root 所有になり、`User=sashiki` で動く sashikid が書けなくなる
+// (`attempt to write a readonly database`)。README どおりの順で入れると必ず踏む。
+//
+// ディレクトリの所有者(deb の postinstall が sashiki にしている)に合わせれば、
+// どちらが先に作っても daemon が書ける。**特定のユーザー名を焼き込まない**のは、
+// ソースから入れた場合や macOS の process モードでは sashiki ユーザーが
+// 存在しないため。その場合はディレクトリも自分の所有なので何もしない。
+//
+// ここ(作る場所)に置くのは、呼び出し側で忘れられるとこのバグが再発するから。
+func alignOwner(path string) {
+	if os.Geteuid() != 0 {
+		return // root でなければ chown できず、必要も無い
+	}
+	di, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		return
+	}
+	dst, ok := di.Sys().(*syscall.Stat_t)
+	if !ok {
+		return
+	}
+	// WAL モードなので -wal / -shm も同じ所有者でないと書けない。
+	for _, f := range []string{path, path + "-wal", path + "-shm"} {
+		fi, err := os.Stat(f)
+		if err != nil {
+			continue
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid == dst.Uid && st.Gid == dst.Gid {
+			continue
+		}
+		_ = os.Chown(f, int(dst.Uid), int(dst.Gid)) // 失敗しても致命ではない
+	}
 }
 
 const schema = `
