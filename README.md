@@ -193,13 +193,26 @@ GitHub Action なら `secrets.SASHIKI_API_TOKEN` を渡すだけ(下の使い方
 
 ```bash
 sashiki create demo --profile sandbox --ttl 7d
+sashiki create demo --exist-ok       # 既にあれば既存を返す(毎回走る hook 向け)
 sashiki list
 sashiki show demo --json
+sashiki env demo                     # DB_HOST= / DB_PORT= / DB_USER=(dotenv)
 sashiki reset demo
 sashiki lease renew demo --for 14d   # 期限を延ばす
 sashiki drain                        # メンテ前に全ブランチを安全停止
 sashiki delete demo
 ```
+
+`--exist-ok` と `env` は、**毎回走る仕組みから呼ぶ**ためのもの。
+`--exist-ok` が無いと 2 回目の create が 409 で落ちるので、呼び出し側は
+`|| true` で **実エラーまで握り潰す**回避に追い込まれる。`env` は
+`show --json | jq` の配管を各所に書かせないためで、環境変数として渡す先
+(CI・アプリ)が求めるのは JSON ではなく `KEY=VALUE` だから。
+
+`env` が出すのは **そのまま繋がる 3 つ組**(host / port / user)だけ。
+内部ポート(`engine_port`)は調査用なので混ぜない。パスワードも出さない —
+払い出し対象ではないし、「表示しただけ」のつもりの操作が CI のログに
+秘密を残すことになる。
 
 ### B. GitHub Action(PR プレビュー)
 

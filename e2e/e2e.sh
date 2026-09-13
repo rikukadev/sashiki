@@ -138,6 +138,21 @@ fi
 log "list"
 sashiki list
 
+log "create --exist-ok は冪等 / env は dotenv を出す"
+# hook から毎回叩かれる経路。冪等でないと利用者は `|| true` で実エラーごと
+# 握り潰す回避に追い込まれる(#259)。
+sashiki create pr-1 --exist-ok > /dev/null || fail "--exist-ok で既存が失敗した"
+# 付けない場合は従来どおり 409 で落ちること(握り潰していないことの裏)
+if sashiki create pr-1 > /dev/null 2>&1; then
+  fail "--exist-ok 無しの重複 create は失敗すべき"
+fi
+envout=$(sashiki env pr-1) || fail "sashiki env が失敗した"
+grep -qx "DB_HOST=sashiki.internal" <<<"$envout" || fail "env: DB_HOST がおかしい: $envout"
+grep -qx "DB_PORT=3306" <<<"$envout" || fail "env: proxy のポートを出すべき: $envout"
+grep -qx "DB_USER=dev@pr-1" <<<"$envout" || fail "env: user がおかしい: $envout"
+grep -q "PASSWORD" <<<"$envout" && fail "env: パスワードを出してはいけない: $envout"
+echo "  exist-ok 冪等 / env は接続に使える 3 つ組だけ"
+
 log "proxy: dev@<branch> ルーティング"
 # API が返す host/port/user は「そのまま繋がる 3 つ組」であること(#260)。
 # 過去に port だけブランチ内部のものを返していて、どう解釈しても接続できない

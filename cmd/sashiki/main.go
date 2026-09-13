@@ -34,7 +34,7 @@ func main() {
 
 func usage() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  sashiki create <name> [--port N] [--owner O] [--purpose P] [--profile P] [--ttl D] [--baseline B] [--source JSON] [--json]
+  sashiki create <name> [--exist-ok] [--port N] [--owner O] [--purpose P] [--profile P] [--ttl D] [--baseline B] [--source JSON] [--json]
   sashiki delete <name> [--json]
   sashiki reset  <name> [--json]
   sashiki recreate <name> [--json]
@@ -46,6 +46,7 @@ func usage() int {
   sashiki list   [--json]
   sashiki show   <name> [--json]
   sashiki connect <name>
+  sashiki env    <name> [--prefix P]        接続情報を KEY=VALUE で出す
   sashiki init   --pool <p> [--device <dev>] [--engine mysql|postgres] [--skip-packages] [--yes]
   sashiki baseline import|list|refresh|promote|set|delete|build|validate|publish|gc   (詳細は sashiki baseline)
   sashiki token create|list|revoke
@@ -92,6 +93,8 @@ func run(args []string) int {
 		return cmdShow(rest)
 	case "connect":
 		return cmdConnect(rest)
+	case "env":
+		return cmdEnv(rest)
 	case "init":
 		return cmdInit(rest)
 	case "baseline":
@@ -242,6 +245,8 @@ func parseFlagsKV(args []string) (pos []string, port int, jsonOut bool, kv map[s
 			if err != nil {
 				return nil, 0, false, nil, fmt.Errorf("--port: %w", err)
 			}
+		case "--exist-ok":
+			kv["exist-ok"] = "true"
 		case "--owner", "--purpose", "--source", "--profile", "--ttl", "--baseline":
 			if i+1 >= len(args) {
 				return nil, 0, false, nil, fmt.Errorf("%s requires a value", a)
@@ -270,7 +275,15 @@ func cmdCreate(args []string) int {
 	if src := kv["source"]; src != "" {
 		body["source"] = json.RawMessage(src)
 	}
-	code, data, err := call("POST", "/v1/branches", body)
+	// --exist-ok: 既にあれば 200 + 既存を返す(API は前から対応していて、
+	// CLI から渡す口が無かった)。up のたびに走る hook から使うためのもので、
+	// 無いと 2 回目が 409 で落ち、`|| true` で **実エラーまで握り潰す** 回避に
+	// 追い込まれる(kagerou#9 / この issue)。
+	path := "/v1/branches"
+	if kv["exist-ok"] == "true" {
+		path += "?exist_ok=true"
+	}
+	code, data, err := call("POST", path, body)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
@@ -524,6 +537,50 @@ func cmdShow(args []string) int {
 			fmt.Printf("  → %s\n", sug)
 		}
 	}
+	return exitOK
+}
+
+// cmdEnv は接続情報を dotenv(KEY=VALUE)で出す。
+//
+// show --json + jq の配管を各所に書かせないためのもの。環境変数として
+// 渡す先(CI・アプリ)は、JSON ではなく KEY=VALUE を求める。
+//
+// **パスワードは出さない。** 払い出されるのは接続先とユーザー名までで、
+// app_user のパスワードは baseline 由来のブランチ共通値。sashiki が
+// 知っている値ではあるが、ここで出すと「接続情報を表示しただけ」の
+// つもりの操作がログや CI の出力に秘密を残す。
+func cmdEnv(args []string) int {
+	prefix := "DB_"
+	var pos []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--prefix" {
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "sashiki: --prefix requires a value")
+				return exitError
+			}
+			i++
+			prefix = args[i]
+			continue
+		}
+		pos = append(pos, args[i])
+	}
+	if len(pos) != 1 {
+		return usage()
+	}
+	code, data, err := call("GET", "/v1/branches/"+pos[0], nil)
+	if err != nil || code != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
+		return statusToExit(code)
+	}
+	var b branchView
+	if err := json.Unmarshal(data, &b); err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
+	// host/port/user は「そのまま繋がる 3 つ組」(#260)。解釈せずに出す。
+	fmt.Printf("%sHOST=%s\n", prefix, b.Host)
+	fmt.Printf("%sPORT=%d\n", prefix, b.Port)
+	fmt.Printf("%sUSER=%s\n", prefix, b.User)
 	return exitOK
 }
 
