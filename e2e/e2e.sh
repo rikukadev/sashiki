@@ -489,17 +489,33 @@ grep -q pr-idle <<<"$(sashiki list)" && fail "reaper: pr-idle should be TTL-dele
 log "reaper: 直接接続は idle stop を防ぐ (#41)"
 sashiki create pr-hold > /dev/null
 holdport=$(sashiki show pr-hold --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["engine_port"])')
-# proxy を通さず branch 実ポートへ直接、長い接続を張る(SLEEP は余裕をもって 30s)
-mysql -udev -pdev -h127.0.0.1 -P"$holdport" -e "SELECT SLEEP(30)" >/dev/null 2>&1 &
-holdpid=$!
-# 接続が確立して SLEEP が走り始めるまで待つ(これを待たずに idle 判定へ入ると
-# connpoll がまだ接続を観測できておらず reaper に寝かされて flaky になる)。
-for _ in $(seq 1 30); do
-  n=$(mysql -udev -pdev -h127.0.0.1 -P"$holdport" -N -e \
-    "SELECT COUNT(*) FROM information_schema.processlist WHERE info LIKE 'SELECT SLEEP%'" 2>/dev/null)
-  [ "${n:-0}" -ge 1 ] && break
-  sleep 0.3
+
+# この構成は idle_stop_after=3s なので、**接続を張る前にブランチが寝る**ことが
+# ある(create から mysql の起動までに 3 秒あれば足りる)。しかも直接接続は
+# proxy を通らないので、寝たブランチを起こせない — 起床は proxy の仕事。
+# そのまま進むと「running のままであるべき」という原因の遠い失敗になる。
+#
+# なので「寝ていたら起こしてから張り直す」を数回試す。掴めたことを
+# 確かめてから先へ進み、掴めなければここで落とす(黙って素通りしない)。
+holdpid=""
+held=""
+for attempt in 1 2 3; do
+  grep -q "pr-hold.*running" <<<"$(sashiki list)" || sashiki wake pr-hold > /dev/null 2>&1 || true
+  mysql -udev -pdev -h127.0.0.1 -P"$holdport" -e "SELECT SLEEP(30)" >/dev/null 2>&1 &
+  holdpid=$!
+  for _ in $(seq 1 30); do
+    n=$(mysql -udev -pdev -h127.0.0.1 -P"$holdport" -N -e \
+      "SELECT COUNT(*) FROM information_schema.processlist WHERE info LIKE 'SELECT SLEEP%'" 2>/dev/null)
+    [ "${n:-0}" -ge 1 ] && { held=yes; break; }
+    sleep 0.3
+  done
+  [ -n "$held" ] && break
+  echo "  掴めなかった(試行 $attempt)。状態: $(sashiki list | grep pr-hold || true)"
+  kill "$holdpid" 2>/dev/null || true
+  wait "$holdpid" 2>/dev/null || true
 done
+[ -n "$held" ] || { sashiki list; fail "reaper: 直接接続を確立できなかった(検証の前提が崩れている)"; }
+
 sleep 6   # idle_stop_after(3s)+ connpoll(1s周期)を十分に跨ぐ
 grep -q "pr-hold.*running" <<<"$(sashiki list)" \
   || { sashiki list; fail "reaper: 直接接続中の pr-hold は running のままであるべき (#41)"; }
