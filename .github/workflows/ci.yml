@@ -46,6 +46,69 @@ jobs:
       - uses: actions/checkout@v7
       - run: ./e2e/action-ssm.sh
 
+  # ─────────────────────────────────────────────
+  # 実 AWS の E2E。EC2 を 1 台立てて、利用者と同じ手順で入れて、捨てる。
+  #
+  # ループバックの e2e では見えないものを見るための枠:
+  #   - **実 EBS デバイス** に対する init(ファイル zpool ではない)
+  #   - **deb 経由の導入**(sashikid.service / sashiki ユーザー / ディレクトリ)
+  #   - **Action の transport=ssm を端から端まで**。action-ssm(偽の aws)は
+  #     送信の形しか見ておらず、届いて動くことは確かめていない
+  #
+  # 生 EC2 は CFN と違って誰も片付けてくれないので、スクリプトの trap と
+  # 下の if: always() で二重に terminate する。
+  # ─────────────────────────────────────────────
+  e2e-aws:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # deb を作るのは、利用者と同じものを入れて確かめるため。
+      # バイナリを直接置くとパッケージが運ぶものが検証されない。
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: latest
+          args: release --snapshot --clean --skip=publish,sign,announce
+
+      - name: Run AWS E2E
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          E2E_ARTIFACT_BUCKET: ${{ vars.E2E_ARTIFACT_BUCKET }}
+          TAG: sashiki-e2e-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          deb=$(find dist -name '*_linux_amd64.deb' -print -quit)
+          [ -n "$deb" ] || { echo "deb が作られていない" >&2; exit 1; }
+          ./e2e/aws/run.sh "$deb" "$TAG"
+
+      # スクリプトごと落ちた場合(構文エラー等)は trap も動かない。
+      # タグで探して確実に落とす。EC2 は放置すると課金が続く。
+      - name: Terminate leftovers
+        if: always()
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          TAG: sashiki-e2e-${{ github.run_id }}
+        run: |
+          ids=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=$TAG" "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query 'Reservations[].Instances[].InstanceId' --output text)
+          if [ -n "$ids" ]; then
+            echo "terminating leftovers: $ids"
+            # shellcheck disable=SC2086 # describe-instances は空白区切りで返す
+            aws ec2 terminate-instances --instance-ids $ids > /dev/null
+          fi
+
   # 実 ZFS + mysqld での E2E。GitHub の ubuntu ランナーは sudo と
   # ZFS カーネルモジュールが使えるため、loopback zpool で完結する。
   e2e:

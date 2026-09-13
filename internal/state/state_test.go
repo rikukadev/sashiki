@@ -2,8 +2,10 @@ package state
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -295,5 +297,42 @@ func TestRecoverInterruptedOperations(t *testing.T) {
 	// 冪等: 2 回目は 0 件
 	if n2, _ := db.RecoverInterruptedOperations(); n2 != 0 {
 		t.Errorf("second run should recover 0, got %d", n2)
+	}
+}
+
+// root で作った state.db を、User=sashiki の daemon が書けなくなる回帰を防ぐ
+// (#265: README どおりに入れると最初の create が readonly で落ちていた)。
+//
+// 本物の検証は実 EC2 の E2E(e2e/aws)。ここで縛るのは「所有者を **ディレクトリから**
+// 取る」ことで、特定のユーザー名を焼き込む実装に戻さないため。
+func TestOpenAlignsOwnerToDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	di, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, ok := di.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skip("Unix ではない")
+	}
+	for _, f := range []string{path, path + "-wal", path + "-shm"} {
+		fi, err := os.Stat(f)
+		if err != nil {
+			continue // -wal / -shm は無いこともある
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			continue
+		}
+		if st.Uid != dst.Uid || st.Gid != dst.Gid {
+			t.Errorf("%s の所有者 %d:%d がディレクトリ %d:%d と違う", f, st.Uid, st.Gid, dst.Uid, dst.Gid)
+		}
 	}
 }
