@@ -360,7 +360,20 @@ make test    # ユニットテスト(ZFS 不要、モックで動く)
 make lint    # golangci-lint
 ```
 
-E2E(実 ZFS + mysqld)は Ubuntu ホスト / VM で `e2e/e2e.sh` を実行する(ループバックの zpool を使うので追加ディスク不要)。
+E2E は 3 段ある。上ほど速く、下ほど本物に近い。
+
+| | 何を確かめるか | どこで |
+|---|---|---|
+| `e2e/action-ssm.sh` | GitHub Action が **送るスクリプトの形**(偽の `aws` を挟む) | 数秒・CI |
+| `e2e/e2e.sh` | 実 ZFS + mysqld の一通り(ループバック zpool なので追加ディスク不要) | 数分・Ubuntu ホスト / VM / CI |
+| `e2e/aws/run.sh` | **実 EC2**。実 EBS への `init`、**deb 経由の導入**、Action の `transport=ssm` が端から端まで | 約 10 分・CI(EC2 を毎回立てて捨てる) |
+
+いちばん下だけが見られるものがある。deb が運ぶもの(`sashikid.service` /
+`sashiki` ユーザー / ディレクトリ)、実 EBS のデバイス名、SSM が本当に届いて
+インスタンス上の CLI が動くこと。**`transport=ssm` の delete が一度も成功して
+いなかった**([#263](https://github.com/rikukadev/sashiki/pull/263))のは、
+ここが無かったため。
+
 Issue / PR 歓迎。設計の背景は [docs/SPEC.md](docs/SPEC.md) と [docs/DECISIONS.md](docs/DECISIONS.md) を参照。
 
 ## License
