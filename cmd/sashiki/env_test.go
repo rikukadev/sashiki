@@ -44,7 +44,7 @@ func TestCmdEnv(t *testing.T) {
 		if r.URL.Path != "/v1/branches/pr-42" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
-		fmt.Fprint(w, branchJSON)
+		_, _ = fmt.Fprint(w, branchJSON)
 	})
 
 	t.Run("dotenv で出す", func(t *testing.T) {
@@ -91,7 +91,7 @@ func TestCmdEnv(t *testing.T) {
 func TestCmdEnvNotFound(t *testing.T) {
 	fakeAPI(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"code":"branch_not_found","message":"no such branch"}`)
+		_, _ = fmt.Fprint(w, `{"code":"branch_not_found","message":"no such branch"}`)
 	})
 	if code := cmdEnv([]string{"nope"}); code == exitOK {
 		t.Error("存在しないブランチで成功してはいけない")
@@ -105,7 +105,7 @@ func TestCreateExistOk(t *testing.T) {
 	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		got = r.URL.Query()
 		w.WriteHeader(http.StatusOK) // exist_ok の既存ヒット
-		fmt.Fprint(w, branchJSON)
+		_, _ = fmt.Fprint(w, branchJSON)
 	})
 
 	t.Run("付ければクエリに乗る", func(t *testing.T) {
