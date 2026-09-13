@@ -59,6 +59,18 @@ aws ec2 describe-instances \
 
 CI 変数: `AWS_ROLE_ARN` / `AWS_REGION` / `E2E_ARTIFACT_BUCKET`。
 
+ロールのポリシーは [`ci-policy.json`](ci-policy.json) にある。**手元で通っても
+CI で落ちる**ことがあるので(手元は admin、CI は絞ったロール)、権限を足したら
+必ずここも更新する:
+
+```bash
+aws iam put-role-policy --role-name sashiki-e2e-github-actions \
+  --policy-name sashiki-e2e --policy-document file://e2e/aws/ci-policy.json
+```
+
+実際 `s3:GetBucketLocation` はこれで見つかった。presign がバケットの
+リージョンを引くために呼ぶが、手元では admin なので気づけなかった。
+
 ## 費用
 
 `t3.medium` を 10 分ほど + EBS 40GB を同じだけ。**1 回あたり $0.02 未満**。
