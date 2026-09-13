@@ -7,6 +7,23 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.10.0](https://github.com/rikukadev/sashiki/compare/v0.9.2...v0.10.0) (2026-09-13)
+
+
+### Features
+
+* **cli:** create --exist-ok と env サブコマンドを足す ([#266](https://github.com/rikukadev/sashiki/issues/266)) ([a9ec9a6](https://github.com/rikukadev/sashiki/commit/a9ec9a6ed286ec3c20806029a7c901f259139996))
+
+
+### Bug Fixes
+
+* **e2e:** 直接接続の検証が、張る前にブランチが寝て落ちるのを直す ([#269](https://github.com/rikukadev/sashiki/issues/269)) ([ec9aeee](https://github.com/rikukadev/sashiki/commit/ec9aeeec8b24a443786beb3f3ede61eb6b21374f))
+
+
+### Documentation
+
+* **releasing:** Actions の権限を絞り戻さないよう明記する ([#268](https://github.com/rikukadev/sashiki/issues/268)) ([ed86a80](https://github.com/rikukadev/sashiki/commit/ed86a8039d248495ab108812fa1ec5e39f433835))
+
 ## [0.9.2](https://github.com/rikukadev/sashiki/compare/v0.9.1...v0.9.2) (2026-09-12)
 
 
