@@ -9,6 +9,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/rikukadev/sashiki/internal/engine"
 	"github.com/rikukadev/sashiki/internal/state"
 )
 
@@ -52,11 +53,6 @@ func (m *Manager) Reap(ctx context.Context) error {
 			}
 			continue
 		}
-		// 長寿命接続を張ったままのブランチは last_conn_at が進まないため、
-		// 現在の接続数を見て使用中なら idle 停止・削除の対象から外す。
-		if m.activeConns(b.Name) > 0 {
-			continue
-		}
 		activity := b.CreatedAt
 		if b.LastConnAt != nil && b.LastConnAt.After(activity) {
 			activity = *b.LastConnAt
@@ -65,15 +61,48 @@ func (m *Manager) Reap(ctx context.Context) error {
 
 		// idle 閾値は branch の profile 由来(未設定は global へフォールバック)。
 		pol := m.resolveProfile(b.Profile)
-		if pol.DeleteAfterIdle > 0 && idle >= pol.DeleteAfterIdle &&
-			(b.State == state.StateRunning || b.State == state.StateSleeping) {
+		deleteDue := pol.DeleteAfterIdle > 0 && idle >= pol.DeleteAfterIdle &&
+			(b.State == state.StateRunning || b.State == state.StateSleeping)
+		stopDue := pol.IdleStopAfter > 0 && idle >= pol.IdleStopAfter && b.State == state.StateRunning
+		if !deleteDue && !stopDue {
+			continue
+		}
+
+		// 長寿命接続を張ったままのブランチは last_conn_at が進まないため、
+		// 現在の接続数を見て使用中なら idle 停止・削除の対象から外す。
+		if m.activeConns(b.Name) > 0 {
+			continue
+		}
+		// connpoll と reaper は独立した ticker で動く。poll の直後に直接接続が
+		// 始まると、次の poll より reaper が先に走って「接続なし」の古い
+		// キャッシュで停止し得る。実際に回収対象になった running branch だけ、
+		// 破壊的な操作の直前に engine へ再確認する。取得失敗も「使用中」に倒す。
+		if b.State == state.StateRunning {
+			if cc, ok := m.eng.(engine.ConnCounter); ok {
+				cctx, cancel := context.WithTimeout(ctx, connPollTimeout)
+				n, err := cc.ConnCount(cctx, engine.Instance{Branch: b.Name, Port: b.Port})
+				cancel()
+				if err != nil {
+					log.Printf("reaper: connection check %s: %v (使用中として保護)", b.Name, err)
+					continue
+				}
+				if n > 0 {
+					if err := m.db.TouchLastConn(b.Name); err != nil {
+						log.Printf("reaper: touch %s: %v", b.Name, err)
+					}
+					continue
+				}
+			}
+		}
+
+		if deleteDue {
 			log.Printf("reaper: deleting %s (idle %s, profile %q)", b.Name, idle.Round(time.Second), b.Profile)
 			if err := m.Delete(ctx, b.Name); err != nil {
 				log.Printf("reaper: delete %s: %v", b.Name, err)
 			}
 			continue
 		}
-		if pol.IdleStopAfter > 0 && idle >= pol.IdleStopAfter && b.State == state.StateRunning {
+		if stopDue {
 			log.Printf("reaper: stopping %s (idle %s, profile %q)", b.Name, idle.Round(time.Second), b.Profile)
 			if err := m.Sleep(ctx, b.Name); err != nil {
 				log.Printf("reaper: stop %s: %v", b.Name, err)

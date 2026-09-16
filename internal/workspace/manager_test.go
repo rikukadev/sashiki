@@ -1405,6 +1405,55 @@ func TestReaperSkipsBranchWithPolledConns(t *testing.T) {
 	}
 }
 
+// connpoll が直接接続をまだキャッシュしていない瞬間でも、reaper は停止直前に
+// engine の現在値を再確認して active branch を保護する。
+func TestReaperChecksEngineBeforeIdleStop(t *testing.T) {
+	eng := &mockEngine{connCount: 1}
+	m := newTestManagerCfg(t, &mockStorage{}, eng, "", func(c *Config) {
+		c.IdleStopAfter = 10 * time.Millisecond
+		c.DeleteAfterIdle = time.Hour
+	})
+	if _, err := m.Create(context.Background(), "pr-race", 0); err != nil {
+		t.Fatal(err)
+	}
+	// pollConnsOnce は意図的に呼ばない。cached count=0 のまま閾値を超える。
+	time.Sleep(15 * time.Millisecond)
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := m.Get(context.Background(), "pr-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State != state.StateRunning {
+		t.Errorf("state = %s, want running (synchronous engine check protects active conn)", info.State)
+	}
+	if info.LastConnAt == nil {
+		t.Error("synchronous engine check should refresh last_conn_at")
+	}
+}
+
+func TestReaperDoesNotProbeSleepingBranchBeforeDelete(t *testing.T) {
+	eng := &mockEngine{connErr: errors.New("listener is stopped")}
+	m := newTestManagerCfg(t, &mockStorage{}, eng, "", func(c *Config) {
+		c.IdleStopAfter = time.Hour
+		c.DeleteAfterIdle = 10 * time.Millisecond
+	})
+	if _, err := m.Create(context.Background(), "pr-sleeping", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.db.SetState("pr-sleeping", state.StateSleeping, ""); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(15 * time.Millisecond)
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(context.Background(), "pr-sleeping"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("sleeping branch should be deleted without probing stopped listener, got %v", err)
+	}
+}
+
 // --- #82 create --baseline ---
 
 func TestCreateFromBaseline(t *testing.T) {
