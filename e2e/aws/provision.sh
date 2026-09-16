@@ -68,6 +68,17 @@ SQL
 sashiki baseline import --from /var/tmp/sample.sql || fail "baseline import が失敗した"
 zfs list "$POOL/base@baseline" > /dev/null || fail "baseline スナップショットが無い"
 
+# Terraform の user-data と同じく、API を全 IF で listen させる(#286)。init の
+# 既定は loopback で、それだと SG を開けても api_url に届かない。ここで同じ
+# 書き換えをしておき、run.sh が「loopback 以外から Bearer で届く / 無しは 401」
+# を確かめる。書き換えの sed は deploy/terraform/user-data.sh.tftpl と揃えること。
+log "listen.api を 0.0.0.0 にして token を発行"
+sed -i -E 's/^( *)api: *"127\.0\.0\.1:8080"/\1api: "0.0.0.0:8080"/' /etc/sashiki/config.yaml
+grep -qE '^ *api: *"0\.0\.0\.0:8080"' /etc/sashiki/config.yaml || fail "listen.api を書き換えられない"
+sashiki token create --name e2e | grep -oE 'sashiki_[0-9a-f]{64}' > /var/tmp/sashiki-e2e-token \
+  || fail "token を発行できない"
+chmod 0600 /var/tmp/sashiki-e2e-token
+
 log "start sashikid"
 systemctl enable --now sashikid || fail "sashikid を起動できない"
 for _ in $(seq 1 30); do

@@ -82,6 +82,14 @@ if [ -f "$CONFIG" ]; then
   # init は app_user / app_pass を生成する(旧名 proxy_user / proxy_pass も許容)。
   sed -i -E "s/^( *)(app_user|proxy_user):.*/\1app_user: ${proxy_user}/" "$CONFIG"
   sed -i -E "s#^( *)(app_pass|proxy_pass):.*#\1app_pass: $DEV_PASSWORD#" "$CONFIG"
+  # init の既定は loopback(127.0.0.1:8080)。それだと SG で 8080 を開けても
+  # 出力の api_url に届かない(#286)。allowed_sg_ids からの Bearer 認証経路を
+  # 成立させるため全 IF で listen する。loopback 無認証の判定は接続元アドレスで
+  # 行うので、この変更で VPC 内からの無認証アクセスが増えることはない。
+  # metrics(9100)は loopback のまま(認証が無い)。
+  sed -i -E 's/^( *)api: *"127\.0\.0\.1:8080"/\1api: "0.0.0.0:8080"/' "$CONFIG"
+  grep -qE '^ *api: *"0\.0\.0\.0:8080"' "$CONFIG" \
+    || echo "sashiki: 警告 listen.api を 0.0.0.0:8080 に書き換えられなかった。api_url には届かない" >&2
 fi
 
 # --- API トークンを sashikid の環境に渡す ---

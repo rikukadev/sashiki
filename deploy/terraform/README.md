@@ -119,9 +119,26 @@ apply 後にサイズが戻ったら通常運用に戻る。
   持たない運用にすること(`terraform.tfstate` の暗号化・アクセス制限は前提)。
 - 単一ノード構成のため `reader_endpoint` は `endpoint` と同じ値を返す(RDS 互換)。
 
-## Web UI / API を手元から使う(SSM ポートフォワード)
+## API を VPC 内から使う(`api_url` + トークン)
 
-API(と Web UI・データブラウザ)は localhost 前提の認証設計のため、リモートに公開せず
+sashikid は `0.0.0.0:8080` で listen し(user-data が init の既定 `127.0.0.1` を
+書き換える、#286)、`allowed_sg_ids` の SG からだけ SG で到達できる。VPC 外からは
+届かない。`api_url` は **http** で、モジュールは TLS 終端を持たない(VPC 内の
+private 通信が前提)。
+
+```bash
+export SASHIKI_API_URL=$(terraform output -raw api_url)
+export SASHIKI_API_TOKEN=$(aws ssm get-parameter --with-decryption \
+  --name "$(terraform output -raw api_token_ssm_path)" --query Parameter.Value --output text)
+sashiki list
+```
+
+GitHub Action の `transport: api`(既定)はこの経路。runner が VPC 外にいるなら
+`transport: ssm` を使う([action/README.md](../../action/README.md))。
+
+## Web UI を手元から使う(SSM ポートフォワード)
+
+Web UI・データブラウザは Bearer トークンを送る手段を持たず loopback 無認証が前提なので、
 SSM ポートフォワードで手元に引いて使う(SSH 鍵・公開ポート不要):
 
 ```bash

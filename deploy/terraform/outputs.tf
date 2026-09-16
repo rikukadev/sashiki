@@ -37,7 +37,7 @@ output "branch_user" {
 }
 
 output "api_url" {
-  description = "sashiki API の URL(create/delete/drain 等)"
+  description = "sashiki API の URL(create/delete/drain 等)。http のみ(TLS 終端は持たない)。allowed_sg_ids からのみ到達でき、Bearer トークン(api_token_ssm_path)が要る"
   value       = "http://${local.endpoint}:8080"
 }
 

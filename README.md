@@ -253,6 +253,11 @@ module "db" {
 EC2 + EBS(prevent_destroy)+ SG + IAM + Route53 + Secrets/SSM を 1 apply。
 apply 完了時点で sashikid が稼働する。詳細は [deploy/terraform/README.md](deploy/terraform/)。
 
+出力 `api_url` は **http**(TLS 終端なし)で、`allowed_sg_ids` の SG からだけ届く。
+VPC 外(GitHub-hosted runner 等)からは Action の `transport: ssm` を使う。
+Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したときだけ作られ、
+渡さなければ `endpoint` は private IP になる。
+
 > **インスタンスを差し替えてもブランチデータは残る**(#246)。`user_data` や AMI を変えて
 > EC2 が作り直されても、データ EBS は `prevent_destroy` で保持される。新しいインスタンスの
 > `sashiki init` は **既存の zpool を検出して `import` し、そのまま再利用する**(pool が無い
