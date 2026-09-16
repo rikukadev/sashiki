@@ -56,8 +56,18 @@ CoW クローンの独立性・snapshot/rollback・rename/delete が、OrbStack 
 直接使うなら `-v sashiki-xfs:/xfs-store` を付ける(無いと起動時に WARN が出て、
 コンテナ削除でデータも消える)。
 
-XFS のサイズは初回の mkfs 時にだけ `XFS_SIZE_MB` で決まる。後から広げるには
-コンテナを止めて `truncate -s +<size> xfs.img` し、起動後に `xfs_growfs /var/lib/sashiki-data`。
+XFS のサイズは初回の mkfs 時にだけ `XFS_SIZE_MB` で決まる。後から 1 GiB 広げる例:
+
+```bash
+docker compose down
+docker run --rm -v sashiki-xfs:/xfs-store ubuntu:24.04 \
+  truncate -s +1G /xfs-store/xfs.img
+docker compose up -d
+docker compose exec sashiki xfs_growfs /var/lib/sashiki-data
+```
+
+Compose が volume 名に project prefix を付けた場合は、`docker volume ls` で実名を確認し、
+上の `sashiki-xfs` を置き換える。縮小はできないので、事前に volume をバックアップする。
 
 ## フル sashikid をコンテナで動かすには（ロードマップ）
 

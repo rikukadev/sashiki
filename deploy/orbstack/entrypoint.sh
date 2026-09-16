@@ -31,6 +31,11 @@ if [ -f /etc/sashiki/config.yaml ] && [ ! -L /etc/sashiki/config.yaml ] && [ ! -
   echo "==> migrating /etc/sashiki/config.yaml -> $CONFIG"
   mv /etc/sashiki/config.yaml "$CONFIG"
 fi
+# 旧既定パスの state.db を STORE へ移した場合、config の参照も同時に直す。
+# 利用者が明示した別パスは上書きせず、旧 entrypoint の既定値だけを移行する。
+if [ -f "$CONFIG" ]; then
+  sed -i "s#^state_db: /var/lib/sashiki/state.db$#state_db: $STATE_DB#" "$CONFIG"
+fi
 
 # --- 1. XFS reflink 領域を用意(既存なら再利用)---
 # XFS_SIZE_MB は初回の mkfs にだけ効く。後から広げるには、コンテナを止めて
