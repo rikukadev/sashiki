@@ -67,7 +67,7 @@ profile は用途ごとの寿命(idle 停止 / 自動削除)を表す。`create 
 ### 1. インストール
 
 ```bash
-# 最新 release を取得して導入(Linux=deb / macOS=tar.gz を自動判別)
+# 最新 release を取得して導入(Linux=deb / macOS=tar.gz を自動判別。release の checksums.txt で sha256 を照合)
 curl -fsSL https://raw.githubusercontent.com/rikukadev/sashiki/main/install.sh | sudo bash
 ```
 
