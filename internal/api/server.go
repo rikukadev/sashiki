@@ -738,6 +738,9 @@ type branchJSON struct {
 	Source         json.RawMessage   `json:"source,omitempty"`
 	ExpiresAt      *string           `json:"expires_at,omitempty"`
 	Stale          bool              `json:"stale,omitempty"` // origin < current baseline(#130)
+	// BackingBaselines: promote 元として baseline 実体を保持している(#179 / #289)。
+	// 空でなければ reset / recreate / delete は 412 で拒否される。
+	BackingBaselines []string `json:"backing_baselines,omitempty"`
 	// Engine は接続方法を決めるのに要る(mysql か postgres か)。CLI はこれを見て
 	// 表示する接続コマンドを選ぶ(#238 の実機検証で postgres でも mysql と案内
 	// していたのが分かったため)。
@@ -763,28 +766,29 @@ func (s *Server) connUser(branch string) string {
 
 func (s *Server) toJSON(i workspace.Info) branchJSON {
 	b := branchJSON{
-		Name:           i.Name,
-		State:          i.State,
-		EngineState:    i.EngineState,
-		Port:           s.connPort(i.Port),
-		Host:           s.domain,
-		User:           s.connUser(i.Name),
-		EnginePort:     i.Port,
-		Engine:         s.engine,
-		OriginSnapshot: i.OriginSnapshot,
-		CreatedAt:      i.CreatedAt.UTC().Format(time.RFC3339),
-		UsedBytes:      i.UsedBytes,
-		LogicalBytes:   i.LogicalBytes,
-		HookStatus:     i.HookStatus,
-		Error:          i.ErrorMessage,
-		FailedOp:       i.FailedOp,
-		ErrorCode:      i.ErrorCode,
-		Recoverable:    i.Recoverable,
-		Suggestions:    i.SuggestedActions,
-		Profile:        i.Profile,
-		Owner:          i.Owner,
-		Purpose:        i.Purpose,
-		Stale:          i.Stale,
+		Name:             i.Name,
+		State:            i.State,
+		EngineState:      i.EngineState,
+		Port:             s.connPort(i.Port),
+		Host:             s.domain,
+		User:             s.connUser(i.Name),
+		EnginePort:       i.Port,
+		Engine:           s.engine,
+		OriginSnapshot:   i.OriginSnapshot,
+		CreatedAt:        i.CreatedAt.UTC().Format(time.RFC3339),
+		UsedBytes:        i.UsedBytes,
+		LogicalBytes:     i.LogicalBytes,
+		HookStatus:       i.HookStatus,
+		Error:            i.ErrorMessage,
+		FailedOp:         i.FailedOp,
+		ErrorCode:        i.ErrorCode,
+		Recoverable:      i.Recoverable,
+		Suggestions:      i.SuggestedActions,
+		Profile:          i.Profile,
+		Owner:            i.Owner,
+		Purpose:          i.Purpose,
+		Stale:            i.Stale,
+		BackingBaselines: i.BackingBaselines,
 	}
 	if i.Source != "" {
 		b.Source = json.RawMessage(i.Source)

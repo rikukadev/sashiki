@@ -98,6 +98,10 @@ sashiki baseline promote pr-123   # pr-123 の現在の datadir を新しい cur
 ```
 
 `promote` は snapshot 不変条件のため対象ブランチを一度 graceful stop し、昇格後に再起動する(既存の他ブランチの origin は変えない)。
+promote したブランチは新 baseline の**実体**(snapshot)を保持するので、別の baseline を
+promote / set するまで **reset / recreate / delete は 412 で拒否**される(`list` では `!`、
+`show` では `baseline:` 行で分かる)。「promote → そのブランチで作業を続ける」なら、
+先に `recreate` で新 baseline から作り直したブランチを使う。
 
 ### 4. ブランチを払い出す
 

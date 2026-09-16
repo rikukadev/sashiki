@@ -206,6 +206,9 @@ type Info struct {
 	// Stale: origin snapshot が current baseline と異なる(= baseline が更新された後)。
 	// reset は origin(古い baseline)に戻すため、最新化したいなら recreate を使う(#130)。
 	Stale bool
+	// BackingBaselines: このブランチの dataset 上に実体を持つ登録済み baseline
+	// (promote 元)。空でなければ reset / recreate / delete は拒否される(#179 / #289)。
+	BackingBaselines []string
 }
 
 func (m *Manager) instance(b state.Branch, vol storage.Volume) engine.Instance {
@@ -391,6 +394,15 @@ func (m *Manager) Reset(ctx context.Context, name string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
+	// promote 済みブランチの保護(#289)。rollback / 作り直しのどちらも baseline
+	// snapshot を失うので、状態を変える前に拒否する。
+	vol, err := m.resolveVolume(ctx, b)
+	if err != nil {
+		return Info{}, err
+	}
+	if err := m.refuseIfBackingBaseline(name, vol, "reset"); err != nil {
+		return Info{}, err
+	}
 	if !m.st.Capabilities().FastRollback {
 		// 遅いバックエンド(fsx)の reset は @init 相当を「同じ origin から
 		// 作り直し」で再現する。recreate と違い baseline は current でなく
@@ -398,10 +410,6 @@ func (m *Manager) Reset(ctx context.Context, name string) (Info, error) {
 		return m.recreateFrom(ctx, b, storage.SnapshotRef(b.OriginSnapshot), hooks.OnCreate)
 	}
 	if err := m.db.SetState(name, state.StateResetting, ""); err != nil {
-		return Info{}, err
-	}
-	vol, err := m.resolveVolume(ctx, b)
-	if err != nil {
 		return Info{}, err
 	}
 	ins := m.instance(b, vol)
@@ -443,6 +451,15 @@ func (m *Manager) Recreate(ctx context.Context, name string) (Info, error) {
 
 	b, err := m.db.GetBranch(name)
 	if err != nil {
+		return Info{}, err
+	}
+	// promote 済みブランチの保護(#289)。rename → destroy -r で baseline 実体を
+	// 失うので、状態を変える前に拒否する。
+	vol, err := m.resolveVolume(ctx, b)
+	if err != nil {
+		return Info{}, err
+	}
+	if err := m.refuseIfBackingBaseline(name, vol, "recreate"); err != nil {
 		return Info{}, err
 	}
 	// on-recreate があればそれを、無ければ on-create を再適用する。
@@ -581,15 +598,10 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 		// 実体が見つからない(手動削除・不整合)場合は行だけ片付ける
 		return m.db.DeleteBranch(name)
 	}
-	// promote 済みブランチの保護(#179): このブランチの dataset 上に登録済み
-	// baseline snapshot が乗っている場合、delete(ebs-zfs は zfs destroy -r)が
-	// それを巻き込み、current baseline が存在しない snapshot を指して宙吊りになる。
-	// 破壊の前に拒否し、別 baseline への set/promote を促す。
-	if backing, err := m.baselinesOnDataset(vol.Dataset); err != nil {
+	// promote 済みブランチの保護(#179): delete(ebs-zfs は zfs destroy -r)が
+	// baseline snapshot を巻き込み、current baseline が宙吊りになる。
+	if err := m.refuseIfBackingBaseline(name, vol, "削除"); err != nil {
 		return err
-	} else if len(backing) > 0 {
-		return fmt.Errorf("%w: branch %q は baseline %v の実体を保持しています。"+
-			"先に別の baseline を promote/set してから削除してください", ErrPreconditionFailed, name, backing)
 	}
 	if err := m.db.SetState(name, state.StateDeleting, ""); err != nil {
 		return err
@@ -907,6 +919,29 @@ func (m *Manager) baselinesOnDataset(dataset string) ([]string, error) {
 	return on, nil
 }
 
+// refuseIfBackingBaseline は branch の dataset 上に登録済み baseline があれば
+// ErrPreconditionFailed を返す(#179 / #289)。delete だけでなく reset / recreate も
+// 対象で、どちらも snapshot を壊す:
+//   - reset は zfs rollback -r で @init より新しい @baseline-* を破棄する
+//     (派生 clone があれば rollback 自体が失敗して error 状態になる)
+//   - recreate は dataset を <name>-recreating に rename してから destroy -r する
+//     ので、baselines 行が存在しない名前を指し、以後の create が全滅する
+//
+// verb はエラー文の動詞(削除 / reset / recreate)。
+func (m *Manager) refuseIfBackingBaseline(name string, vol storage.Volume, verb string) error {
+	backing, err := m.baselinesOnDataset(vol.Dataset)
+	if err != nil {
+		return err
+	}
+	if len(backing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: branch %q は baseline %v の実体を保持しています。"+
+		"%s すると登録済み baseline が壊れるため拒否しました。"+
+		"先に別の baseline を promote/set し、この baseline を delete/GC してください",
+		ErrPreconditionFailed, name, backing, verb)
+}
+
 // currentBaseline は DB の切り替え記録を優先し、無ければバックエンド既定を使う。
 func (m *Manager) currentBaseline() storage.SnapshotRef {
 	if snap, ok := m.db.CurrentBaselineOverride(); ok {
@@ -959,6 +994,9 @@ func (m *Manager) info(ctx context.Context, name string) (Info, error) {
 	// 素直に取れない apfs / reflink 等は -1 のままにして表示側で「-」を出す(#128)。
 	info := Info{Branch: b, UsedBytes: -1, LogicalBytes: -1}
 	if vol, err := m.resolveVolume(ctx, b); err == nil {
+		if backing, err := m.baselinesOnDataset(vol.Dataset); err == nil && len(backing) > 0 {
+			info.BackingBaselines = backing
+		}
 		if used, err := m.st.UsedBytes(ctx, vol); err == nil && used >= 0 {
 			info.UsedBytes = used
 		}
