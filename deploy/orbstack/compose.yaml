@@ -17,8 +17,10 @@ services:
       - "13306:3306"   # proxy(user@branch ルーティング)
       - "8080:8080"   # REST API / Web UI
     environment:
-      XFS_SIZE_MB: "2048"
+      XFS_SIZE_MB: "2048"   # 初回の mkfs にだけ効く(拡張は entrypoint.sh のコメント参照)
     volumes:
-      - sashiki-xfs:/xfs-store   # XFS イメージの永続化(任意)
+      # ブランチ・baseline(XFS イメージ)・state.db・config はすべてここ(#290)。
+      # `docker compose down` では残り、`down -v` で消える。
+      - sashiki-xfs:/xfs-store
 volumes:
   sashiki-xfs:

@@ -41,6 +41,24 @@ PASS
 CoW クローンの独立性・snapshot/rollback・rename/delete が、OrbStack 上の実 XFS で
 動くことを確認できる。
 
+## データの置き場所(永続化)
+
+`entrypoint.sh` は永続化する物を全部 `/xfs-store`(compose の named volume
+`sashiki-xfs`)に置く(#290):
+
+| 何 | どこ |
+|---|---|
+| XFS イメージ(ブランチ・baseline の実体) | `/xfs-store/xfs.img` → `/var/lib/sashiki-data` に loop mount |
+| state.db | `/xfs-store/state.db` |
+| config | `/xfs-store/config.yaml`(`/etc/sashiki/config.yaml` は symlink) |
+
+`docker compose down` では残り、`docker compose down -v` で消える。`docker run` で
+直接使うなら `-v sashiki-xfs:/xfs-store` を付ける(無いと起動時に WARN が出て、
+コンテナ削除でデータも消える)。
+
+XFS のサイズは初回の mkfs 時にだけ `XFS_SIZE_MB` で決まる。後から広げるには
+コンテナを止めて `truncate -s +<size> xfs.img` し、起動後に `xfs_growfs /var/lib/sashiki-data`。
+
 ## フル sashikid をコンテナで動かすには（ロードマップ）
 
 本 PR で **CoW 基盤（storage 層）は OrbStack 実機で検証済み**。エンドツーエンドで

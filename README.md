@@ -152,6 +152,11 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 13306                  # 未知ブラン�
 - 要件: `privileged`(loopback FS のマウント用)と reflink 対応 FS。ホストの OS は問わない。
 - ポート: REST / Web UI が `:8080`、proxy が `:3306`(compose ではホスト側の衝突回避で
   `13306:3306` に割り当て済み。上の例が `-P 13306` なのはこのため)。
+- データ: ブランチ・baseline(XFS イメージ)・state.db・config は named volume `sashiki-xfs`
+  に置く。`docker compose down` では残り、`down -v` で消える。XFS のサイズは初回のみ
+  `XFS_SIZE_MB`(既定 2048)で決まる。
+- API はコンテナ外(ホスト)から見ると loopback ではないので、CLI / Web UI をホストから
+  使うには `SASHIKI_API_TOKEN` が要る(`docker compose exec sashiki sashiki token create --name dev`)。
 
 ディレクトリ名は歴史的経緯で `deploy/orbstack/` だが、**特定の製品に依存しない**
 (Docker 互換ランタイム全般で動く)。詳細は [deploy/orbstack/README.md](deploy/orbstack/)。
