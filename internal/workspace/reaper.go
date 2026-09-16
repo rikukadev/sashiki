@@ -79,9 +79,7 @@ func (m *Manager) Reap(ctx context.Context) error {
 		// 破壊的な操作の直前に engine へ再確認する。取得失敗も「使用中」に倒す。
 		if b.State == state.StateRunning {
 			if cc, ok := m.eng.(engine.ConnCounter); ok {
-				cctx, cancel := context.WithTimeout(ctx, connPollTimeout)
-				n, err := cc.ConnCount(cctx, engine.Instance{Branch: b.Name, Port: b.Port})
-				cancel()
+				n, err := m.checkedConnCount(ctx, cc, engine.Instance{Branch: b.Name, Port: b.Port})
 				if err != nil {
 					log.Printf("reaper: connection check %s: %v (使用中として保護)", b.Name, err)
 					continue

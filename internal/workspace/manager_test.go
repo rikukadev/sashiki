@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,6 +133,26 @@ type mockEngine struct {
 	connErr   error // ConnCount が返すエラー
 	exposed   []string
 	exposeErr error
+}
+
+type overlapCounter struct {
+	mu     sync.Mutex
+	active int
+	max    int
+}
+
+func (c *overlapCounter) ConnCount(context.Context, engine.Instance) (int, error) {
+	c.mu.Lock()
+	c.active++
+	if c.active > c.max {
+		c.max = c.active
+	}
+	c.mu.Unlock()
+	time.Sleep(10 * time.Millisecond)
+	c.mu.Lock()
+	c.active--
+	c.mu.Unlock()
+	return 0, nil
 }
 
 func (m *mockEngine) Start(ctx context.Context, ins engine.Instance) error {
@@ -1451,6 +1472,27 @@ func TestReaperDoesNotProbeSleepingBranchBeforeDelete(t *testing.T) {
 	}
 	if _, err := m.Get(context.Background(), "pr-sleeping"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("sleeping branch should be deleted without probing stopped listener, got %v", err)
+	}
+}
+
+func TestConnectionChecksAreSerialized(t *testing.T) {
+	m := &Manager{}
+	counter := &overlapCounter{}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := m.checkedConnCount(context.Background(), counter, engine.Instance{Branch: "pr-1", Port: 3401}); err != nil {
+				t.Errorf("checkedConnCount: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	counter.mu.Lock()
+	defer counter.mu.Unlock()
+	if counter.max != 1 {
+		t.Fatalf("concurrent connection checks = %d, want 1", counter.max)
 	}
 }
 
