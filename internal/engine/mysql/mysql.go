@@ -6,6 +6,7 @@ package mysql
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -216,4 +217,42 @@ func (e *Engine) ConnCount(ctx context.Context, ins engine.Instance) (int, error
 		n-- // 自分の接続を除く
 	}
 	return n, nil
+}
+
+// ExposedListeners は各 branch port へ非 loopback のローカル IP から TCP 接続を
+// 試し、到達できる listener を返す。127.0.0.1 / ::1 のみに bind していれば、
+// 同じホストの private IP 宛てでも接続できない。MySQL handshake には進まず、TCP
+// 接続が成立した時点ですぐ閉じる(#288)。
+func (e *Engine) ExposedListeners(ctx context.Context, instances []engine.Instance) ([]string, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, fmt.Errorf("list interface addresses: %w", err)
+	}
+	var ips []net.IP
+	for _, addr := range addrs {
+		ip, _, err := net.ParseCIDR(addr.String())
+		if err != nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		ips = append(ips, ip)
+	}
+
+	var exposed []string
+	for _, ins := range instances {
+		for _, ip := range ips {
+			addr := net.JoinHostPort(ip.String(), strconv.Itoa(ins.Port))
+			dialer := net.Dialer{Timeout: 200 * time.Millisecond}
+			conn, err := dialer.DialContext(ctx, "tcp", addr)
+			if err != nil {
+				if ctx.Err() != nil {
+					return exposed, ctx.Err()
+				}
+				continue
+			}
+			_ = conn.Close()
+			exposed = append(exposed, fmt.Sprintf("%s (%s)", ins.Branch, addr))
+			break // branch ごとに代表アドレスを1つ報告すれば十分
+		}
+	}
+	return exposed, nil
 }

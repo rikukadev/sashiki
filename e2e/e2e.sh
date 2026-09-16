@@ -104,6 +104,14 @@ q() { mysql -udev -pdev -h127.0.0.1 -P"$1" -N -e "$2" 2>/dev/null; }
 log "create pr-1"
 time sashiki create pr-1
 [ "$(q 3401 'SELECT COUNT(*) FROM app.items')" = "3" ] || fail "pr-1 should have 3 items"
+# branch の実ポートは内部用。proxy の認証を迂回できないよう loopback だけで
+# listen する(#288)。0.0.0.0 / [::] で待ち受けていたら即失敗させる。
+branch_listener=$(ss -ltnH "sport = :3401")
+grep -qE '127\.0\.0\.1:3401([[:space:]]|$)' <<<"$branch_listener" \
+  || fail "branch port 3401 is not bound to loopback: $branch_listener"
+if grep -qE '(^|[[:space:]])(0\.0\.0\.0|\*|\[::\]):3401([[:space:]]|$)' <<<"$branch_listener"; then
+  fail "branch port 3401 is exposed: $branch_listener"
+fi
 # refquota が clone 直後に適用されていること(#85)
 [ "$(zfs get -H -o value refquota $POOL/branches/pr-1)" = "100M" ] || fail "refquota 100M should be applied (#85)"
 

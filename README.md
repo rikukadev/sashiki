@@ -282,6 +282,10 @@ Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したと�
 - **profile / lease**: 用途ごとの idle lifecycle(preview / ci / sandbox)+ `--ttl` / `lease renew` の絶対期限
 - **proxy(:3306 固定エンドポイント)**: `mysql -udev@<branch>` でルーティング。**認証終端(方式A)**——sashiki がパスワードを検証し、**認証後に** lazy create(認証前のリソース確保を防ぐ)。TLS 終端対応(`proxy.tls_cert`)
 - **アイドル管理**: 無接続で mysqld 停止(`sleeping`)、再接続で起床。engine ポーリングで接続を追跡するので proxy を通らない接続でも正しく判定。TTL / lease で自動削除
+
+> **セキュリティ:** branch ごとの MySQL ポート(`3401-3600`)は内部用で、既定では
+> `127.0.0.1` にだけ bind する。外部クライアントには認証終端の proxy(`3306`)だけを
+> 公開し、branch ポートを Security Group・ファイアウォール・ポート転送で公開しないこと。
 - **baseline**: build → validate → publish。PII マスキングを必須化できる。`baseline set` で即ロールバック、`baseline promote` で検証済みブランチを次の baseline に昇格
 - **capacity 管理**: メモリ admission(不足時は新規を拒否して既存 mysqld を OOM から守る)、storage watermark、`sashiki capacity`
 - **運用**: 起動時 reconciliation、`sashiki doctor`、orphan GC、`sashiki drain`、構造化ログ + Prometheus メトリクス、Web UI

@@ -130,6 +130,8 @@ type mockEngine struct {
 	startErr  error
 	connCount int   // ConnCount が返す接続数(#41)
 	connErr   error // ConnCount が返すエラー
+	exposed   []string
+	exposeErr error
 }
 
 func (m *mockEngine) Start(ctx context.Context, ins engine.Instance) error {
@@ -153,6 +155,9 @@ func (m *mockEngine) IsRunning(ctx context.Context, ins engine.Instance) (bool, 
 }
 func (m *mockEngine) ConnCount(ctx context.Context, ins engine.Instance) (int, error) {
 	return m.connCount, m.connErr
+}
+func (m *mockEngine) ExposedListeners(ctx context.Context, instances []engine.Instance) ([]string, error) {
+	return m.exposed, m.exposeErr
 }
 
 // --- helpers ---
@@ -1135,7 +1140,11 @@ func TestReconcileDetectsOrphans(t *testing.T) {
 
 func TestDoctorReportsIssues(t *testing.T) {
 	st := &mockStorage{poolUsed: 50, poolTotal: 100, volumes: []string{"pr-1"}}
-	m := newTestManager(t, st, &mockEngine{}, "")
+	eng := &mockEngine{exposed: []string{"pr-1 (10.0.0.10:3401)"}}
+	m := newTestManager(t, st, eng, "")
+	if err := m.db.CreateBranch("pr-1", 3401, "pool/base@b1"); err != nil {
+		t.Fatal(err)
+	}
 	_ = m.db.RegisterBaseline("pool/base@b1", state.BaselineProvenance{})
 	_ = m.db.SetCurrentBaseline("pool/base@b1")
 	d, err := m.Doctor(context.Background())
@@ -1168,6 +1177,12 @@ func TestDoctorReportsIssues(t *testing.T) {
 	}
 	if status["baseline validated"] != checkWarn {
 		t.Errorf("baseline validated check = %q, want warn (empty provenance)", status["baseline validated"])
+	}
+	if status["branch listener exposure"] != checkWarn {
+		t.Errorf("branch listener exposure check = %q, want warn", status["branch listener exposure"])
+	}
+	if len(d.ExposedListeners) != 1 || !strings.Contains(d.ExposedListeners[0], "10.0.0.10:3401") {
+		t.Errorf("exposed listeners = %v", d.ExposedListeners)
 	}
 }
 
@@ -1571,6 +1586,50 @@ func TestDeleteRefusesBranchBackingBaseline(t *testing.T) {
 	}
 	if err := m.Delete(ctx, "pr-2"); err != nil {
 		t.Errorf("non-backing branch should delete cleanly: %v", err)
+	}
+}
+
+// promote 元 dataset 上の baseline を reset/recreate が破壊しないこと(#289)。
+// precondition は状態変更や storage 操作より前に判定する。
+func TestResetAndRecreateRefuseBranchBackingBaseline(t *testing.T) {
+	ctx := context.Background()
+	eng := &mockEngine{}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
+	m := newTestManager(t, st, eng, "")
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := m.PromoteBranch(ctx, "pr-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{name: "reset", run: func() error { _, err := m.Reset(ctx, "pr-1"); return err }},
+		{name: "recreate", run: func() error { _, err := m.Recreate(ctx, "pr-1"); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.run(); !errors.Is(err, ErrPreconditionFailed) {
+				t.Fatalf("%s should refuse baseline-backing branch, got %v", tc.name, err)
+			}
+		})
+	}
+	if len(st.rollbacks) != 0 || len(st.renamed) != 0 {
+		t.Fatalf("refused operations mutated storage: rollbacks=%v renamed=%v", st.rollbacks, st.renamed)
+	}
+	b, err := m.db.GetBranch("pr-1")
+	if err != nil || b.State != state.StateRunning {
+		t.Fatalf("branch changed after refused operations: branch=%+v err=%v", b, err)
+	}
+	info, err := m.Get(ctx, "pr-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.BackingBaselines) != 1 || info.BackingBaselines[0] != snap {
+		t.Fatalf("backing baselines=%v, want [%s]", info.BackingBaselines, snap)
 	}
 }
 
