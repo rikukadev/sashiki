@@ -624,7 +624,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 
 	// 既存 @baseline があれば失敗(上書きは派生ブランチを壊すため refresh フローで扱う)
 	if err := exec.Command("zfs", "list", snap).Run(); err == nil {
-		return fmt.Errorf("snapshot %s は既に存在します。取得し直しは baseline refresh (issue #10) で対応予定", snap)
+		return fmt.Errorf("snapshot %s は既に存在します。取り直すなら sashiki baseline refresh(または build → validate → publish)を使う", snap)
 	}
 
 	mountOut, err := exec.Command("zfs", "get", "-H", "-o", "value", "mountpoint", base).Output()

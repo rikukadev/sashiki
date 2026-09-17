@@ -47,7 +47,7 @@ variable "root_volume_size" {
 }
 
 variable "engine_version" {
-  description = "MySQL のメジャーバージョン(user-data のパッケージ選択に使う)"
+  description = "RDS / Aurora モジュールとの互換のために受ける。現状は未使用(MySQL は AMI の apt 既定版が入る)"
   type        = string
   default     = "8.0"
 }

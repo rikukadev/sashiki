@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # on-create フックの例: PR ブランチのマイグレーションを適用する。
 # /etc/sashiki/hooks/on-create.sh に置いて実行権限を付けると有効になる。
-# 受け取る環境変数は docs/DECISIONS.md と README を参照。
+# 受け取る環境変数(SASHIKI_BRANCH / SASHIKI_PORT / SASHIKI_DATADIR …)の一覧は docs/SPEC.md 16-2。
 set -euo pipefail
 
 echo "branch=${SASHIKI_BRANCH} port=${SASHIKI_PORT} socket=${SASHIKI_SOCKET}"

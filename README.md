@@ -24,7 +24,7 @@ $ sashiki delete pr-123    # 用が済んだら消す
 - 複製は **CoW なのでコピーしない**。クローン直後のディスク消費は数百 KB
 - ブランチは完全に分離。`DROP TABLE` しても他ブランチとベースは無傷
 - 実データ量でマイグレーションをレビューできる(本番で長時間ロックする ALTER が事前に見つかる)
-- 課金されるのは動いている mysqld だけ。アイドルブランチは自動停止し、再接続で起きる
+- メモリを使うのは動いている mysqld だけ(ホストは常時 1 台動く)。アイドルブランチは自動停止し、proxy 経由の再接続で起きる
 
 背景と実測: [EBS 版 PoC](https://rikuka.dev/blog/db-branch-zfs-mysql-poc/) / [FSx 版検証](https://rikuka.dev/blog/db-branch-fsx-openzfs/) / [PoC から OSS へ(設計とアーキテクチャ)](https://rikuka.dev/blog/db-branch-sashiki-oss/)
 
@@ -40,7 +40,7 @@ $ sashiki delete pr-123    # 用が済んだら消す
 | **CI の分離 DB** | `ci` | ジョブごとに create、短い TTL で自動回収 |
 | **開発者の sandbox** | `sandbox` | 手元から `create`、長めに保持 |
 | **マイグレーション検証** | 任意 | 実データ量で ALTER を試す。壊したら `reset` |
-| **RDS / Aurora の非本番用置き換え** | — | Terraform モジュールで 1 apply(入出力は RDS 互換)。※非本番のみ |
+| **RDS / Aurora の非本番用置き換え** | — | Terraform モジュールで 1 apply(主要な変数名・出力名を RDS / Aurora モジュールに揃えてある)。※非本番のみ |
 
 profile は用途ごとの寿命(idle 停止 / 自動削除)を表す。`create --ttl 7d` や `lease renew` で期限も付けられる。
 
@@ -271,7 +271,7 @@ sashiki delete demo
 ### B. GitHub Action(PR プレビュー)
 
 ```yaml
-- uses: rikukadev/sashiki/action@main
+- uses: rikukadev/sashiki/action@v0.10.0 # x-release-please-version
   with:
     api_url: ${{ vars.SASHIKI_API_URL }}
     token:   ${{ secrets.SASHIKI_API_TOKEN }}
@@ -280,7 +280,11 @@ sashiki delete demo
     comment: "true"     # 接続先(host/port/user)を PR にコメント
 ```
 
-PR open/reopen で create、close で delete。接続情報を出力するのでプレビュー環境の env にそのまま渡せる。
+PR の open / reopen / **synchronize(push)** で create(既にあれば既存を返す)、close で delete(既に無ければ成功扱い)。
+それ以外のイベント(`labeled` など)は何もしない。接続情報(`host` / `port` / `user`)を出力するので
+プレビュー環境の env にそのまま渡せる。`comment: "true"` には `pull-requests: write` 権限が要る。
+close を取りこぼしても消えるよう `--ttl` や profile の `delete_after_idle` と併用する。
+ref はタグで固定する(`@main` は未リリースの変更を拾う)。入力の一覧は [action/README.md](action/README.md)。
 
 ### C. Terraform(RDS を選ぶところで sashiki を選ぶ)
 
@@ -295,9 +299,8 @@ module "db" {
 
   instance_class    = "m6i.large"    # RDS と同じ変数名
   allocated_storage = 100
-  engine_version    = "8.0"
 }
-# 出力: endpoint / port / username / password_secret_arn / api_url ...(RDS/Aurora 互換)
+# 出力: endpoint / port / username / password_secret_arn / api_url ...(RDS/Aurora モジュールと同名)
 ```
 
 > **バージョンの固定**: `source` の `?ref=` を**バージョンタグ**にすれば、`sashiki_ref`(install.sh の
@@ -312,12 +315,19 @@ VPC 外(GitHub-hosted runner 等)からは Action の `transport: ssm` を使う
 Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したときだけ作られ、
 渡さなければ `endpoint` は private IP になる。
 
-> **インスタンスを差し替えてもブランチデータは残る**(#246)。`user_data` や AMI を変えて
-> EC2 が作り直されても、データ EBS は `prevent_destroy` で保持される。新しいインスタンスの
+> **インスタンスを差し替えてもブランチデータは残る**(#246)。EC2 が作り直されても
+> (`terraform apply -replace` など)、データ EBS は `prevent_destroy` で保持される。
+> ※ `ami` は `ignore_changes` なので AMI の更新では作り直されず、`user_data` の変更も既定では
+> in-place(再実行されない)。インスタンスを入れ替えるときは明示的に `-replace` する。
+> state.db は root volume 上にあるので、入れ替え後の台帳の扱いは [#275](https://github.com/rikukadev/sashiki/issues/275) を参照。新しいインスタンスの
 > `sashiki init` は **既存の zpool を検出して `import` し、そのまま再利用する**(pool が無い
 > ときだけ `zpool create`)。ブランチも baseline もそのまま使える。
 > ※ import は `-f` 付き(インスタンス差し替えで hostid が変わるため)。EBS は 1 台にしか
 > attach されないので、他ホストと同時にマウントする事故は起きない。
+
+モジュールは MySQL 専用(Postgres を選ぶ変数は無い)で、データ EBS の暗号化指定とバックアップ(snapshot)は
+していない。`prevent_destroy` は「消えない」保証で「戻せる」保証ではないので、要るなら AWS Backup 等を別途掛ける。
+`engine_version` は RDS モジュールとの互換のために受けるだけで、現状は何にも使っていない。
 
 ---
 
@@ -325,8 +335,9 @@ Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したと�
 
 - **branch lifecycle**: create / reset / recreate / delete / retry(create / reset / recreate / wake が途中で失敗したブランチを `error` から再実行。残骸は掃除して origin から作り直す)
 - **profile / lease**: 用途ごとの idle lifecycle(preview / ci / sandbox)+ `--ttl` / `lease renew` の絶対期限
-- **proxy(:3306 固定エンドポイント)**: `mysql -udev@<branch>` でルーティング。**認証終端(方式A)**——sashiki がパスワードを検証し、**認証後に** lazy create(認証前のリソース確保を防ぐ)。TLS 終端対応(`proxy.tls_cert`)
-- **アイドル管理**: 無接続で mysqld 停止(`sleeping`)、再接続で起床。engine ポーリングで接続を追跡するので proxy を通らない接続でも正しく判定。TTL / lease で自動削除
+- **proxy(:3306 固定エンドポイント)**: `mysql -udev@<branch>` でルーティング。**認証終端(方式A)**——sashiki がパスワードを検証し、**認証後に** lazy create(認証前のリソース確保を防ぐ)。TLS 終端対応(`proxy.tls_cert` と `proxy.tls_key` の両方。未設定だと `--ssl-mode=REQUIRED` のクライアントは繋がらない)
+- **アイドル管理**: 無接続で mysqld 停止(`sleeping`)、proxy 経由の再接続で起床。idle は「作成時刻と最後の接続の新しい方」から数える(作って一度も繋がなければ作成時刻から)。engine ポーリング(MySQL は `mysql` クライアント、Postgres は `psql`)で接続を追跡するので proxy を通らない直結も「使用中」と判定する。ポーリングに失敗し続けるブランチは使用中として保護され回収されない(ログに警告)。TTL / lease で自動削除
+  - 起床は proxy の認証中に同期で行う(クライアントの接続は最大 60 秒待つ)。起床時にもメモリ / storage の admission が走り、足りなければ起きない。失敗理由はクライアントには `Unknown branch` としか見えないので sashikid のログを見る
 
 > **セキュリティ:** branch ごとの MySQL ポート(`3401-3600`)は内部用で、既定では
 > `127.0.0.1` にだけ bind する。外部クライアントには認証終端の proxy(`3306`)だけを
@@ -353,7 +364,7 @@ flowchart LR
     proxy -->|"route / lazy create"| d
     d --> storage["storage interface<br/>ebs-zfs · fsx-zfs · apfs · reflink"]
     d --> engine["engine interface<br/>mysql · postgres<br/>systemd / process モード"]
-    d --> hooks["hooks<br/>on-create · on-reset · on-baseline-*"]
+    d --> hooks["hooks<br/>on-create · on-recreate · on-reset · on-delete · on-baseline-validate"]
     d --> state[("state.db（SQLite）<br/>branch · baseline · operation · token")]
     engine -.->|"起動 / 停止 / ready / 接続数"| mysqld["mysqld（ブランチごと）"]
     storage -.->|"CoW クローン / snapshot / 破棄"| datadir[("branch datadir<br/>@init · @baseline")]
@@ -365,7 +376,7 @@ flowchart LR
 
 - **storage** と **engine** はインターフェース。バックエンドは `Capabilities`(FastRollback / TypicalCreate / ClonesAreDistinct)を宣言し、コアが挙動を切り替える(zfs の rollback は数秒、FSx は再クローン方式——同じ「reset」でも実装が変わる)
 - **@init / @baseline スナップショットは必ず mysqld の正常終了状態でのみ取得する**。破るとブランチ起動のたびに InnoDB クラッシュリカバリが走る(設計全体で最も重要な不変条件)
-- 自社固有の処理(マイグレーション適用・データマスク)はコアに入れず **hooks** に追い出す
+- 自社固有の処理(マイグレーション適用・データマスク)はコアに入れず **hooks** に追い出す。hook は `on-create` / `on-recreate` / `on-reset` / `on-delete` / `on-baseline-validate` の 5 つ(baseline の build は `baseline.refresh_script` か `source_dir`)。`on-delete` は DB を止めた後に走る(最終ダンプには使えない)。`on-reset` / `on-delete` の失敗は記録して続行する
 
 設計仕様は [docs/SPEC.md](docs/SPEC.md)、設計判断(ADR)は [docs/DECISIONS.md](docs/DECISIONS.md)、コスト比較は [docs/COSTS.md](docs/COSTS.md)。
 
@@ -390,11 +401,11 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 | | 状態 |
 |---|---|
 | MySQL + GitHub PR プレビュー | ✅ 実機検証済み(create / reset / recreate / delete / lazy create / proxy / baseline 更新 / スキーマ比較) |
-| macOS ネイティブ(APFS + process) | ✅ 実機検証済み(VM 無し。MySQL 8.0 / 8.4 / 26.7 で実機確認)。`sashiki init --platform darwin`(`--engine postgres` も可) |
+| macOS ネイティブ(APFS + process) | ✅ 実機検証済み(VM 無し。MySQL 8.0 / 8.4 / 26.7 で実機確認)。`sashiki init --platform darwin`(macOS では `--platform` は省略可。`--engine postgres` も可) |
 | コンテナ(XFS reflink, VM 無し) | ✅ 実機検証済み(sashikid フルコンテナ化。create / reset / delete / lazy create。Docker 互換ランタイム全般。[deploy/orbstack/](deploy/orbstack/)) |
 | PostgreSQL | ✅ MySQL と同等(proxy / lazy create / baseline import / init / refresh / データブラウザ)。Linux(ZFS)と **macOS ネイティブ(APFS, VM 無し)** の両方で実機検証済み |
 | EBS-ZFS バックエンド | ✅ default(Linux)。単一ホスト |
-| FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ) |
+| FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ)。`baseline promote` 未対応、lazy create 無効(create に 60〜90 秒かかるため)、reset は同じ origin から作り直す(on-create hook を再実行する)。GC / 使用量 / quota / watermark の差は [#278](https://github.com/rikukadev/sashiki/issues/278) |
 | API / config の安定性 | ⚠️ 未固定。v0.x の間はマイナー版で破壊的変更があり得る |
 
 > **プロキシとドライバ**: `:3306` プロキシ(方式A)はクライアントの capability に追従するので、**DEPRECATE_EOF を要求しないドライバ(PHP mysqlnd / Node / PyMySQL 等)でも正しく動く**(v0.4.1 で修正、[#125](https://github.com/rikukadev/sashiki/issues/125))。認証は**クライアント側・backend 側とも `caching_sha2_password` に対応**しており、`mysql_native_password` を廃止した版でも「8.0 を入れ直す」必要はない([#197](https://github.com/rikukadev/sashiki/issues/197) / [#209](https://github.com/rikukadev/sashiki/issues/209))。app_user のプラグインは**backend の版を見て自動で選ぶ**(5.7 は native、8.0 以降は caching_sha2、MariaDB は native。[#211](https://github.com/rikukadev/sashiki/issues/211) / [#219](https://github.com/rikukadev/sashiki/issues/219))。
@@ -425,7 +436,7 @@ A. profile は「無接続が続いたら止める/消す」寿命ポリシー(p
 
 **Q. PostgreSQL は?**
 
-A. engine として対応。**proxy(固定エンドポイント)と lazy create も MySQL と同様に動く**(SCRAM-SHA-256 で認証終端。クライアントの `application_name` / `TimeZone` / `options` などの startup パラメータは backend にそのまま渡す。md5 / password 認証しか話せないドライバ、channel binding(`channel_binding=require`)、replication 接続は proxy 経由では使えない)。idle 管理は engine ポーリングで両対応(app ロールで `pg_stat_activity` を読む。取得に失敗し続けるブランチは保護され回収されないので、sashikid のログの `connpoll` 警告を見る)。baseline import / `init` の自動構築はまだ MySQL のみで、Postgres の baseline は手動で用意する([#230](https://github.com/rikukadev/sashiki/issues/230) で対応中)。
+A. engine として対応。**proxy(固定エンドポイント)と lazy create も MySQL と同様に動く**(SCRAM-SHA-256 で認証終端。クライアントの `application_name` / `TimeZone` / `options` などの startup パラメータは backend にそのまま渡す。md5 / password 認証しか話せないドライバ、channel binding(`channel_binding=require`)、replication 接続は proxy 経由では使えない)。idle 管理は engine ポーリングで両対応(app ロールで `pg_stat_activity` を読む。取得に失敗し続けるブランチは保護され回収されないので、sashikid のログの `connpoll` 警告を見る)。`baseline import`(プレーン SQL / `pg_dump` のカスタム形式・ディレクトリ形式)と `init --engine postgres` にも対応している。
 
 **Q. FSx バックエンドはいつ使う?**
 
@@ -439,13 +450,17 @@ make test    # ユニットテスト(ZFS 不要、モックで動く)
 make lint    # golangci-lint
 ```
 
-E2E は 3 段ある。上ほど速く、下ほど本物に近い。
+E2E は上ほど速く、下ほど本物に近い。
 
 | | 何を確かめるか | どこで |
 |---|---|---|
 | `e2e/action-ssm.sh` | GitHub Action が **送るスクリプトの形**(偽の `aws` を挟む) | 数秒・CI |
-| `e2e/e2e.sh` | 実 ZFS + mysqld の一通り(ループバック zpool なので追加ディスク不要) | 数分・Ubuntu ホスト / VM / CI |
-| `e2e/aws/run.sh` | **実 EC2**。実 EBS への `init`、**deb 経由の導入**、Action の `transport=ssm` が端から端まで | 約 10 分・CI(EC2 を毎回立てて捨てる) |
+| `e2e/install-sh.sh` | `install.sh` の checksum 照合と macOS 標準 `/bin/bash`(3.2)での動作(偽の `curl`) | 数秒・CI(ubuntu / macos) |
+| `e2e/e2e.sh` | 実 ZFS + mysqld の一通り(ループバック zpool なので追加ディスク不要) | 数分・Ubuntu ホスト / VM / CI。macOS からは `make e2e-local`(Lima) |
+| `e2e/postgres/e2e.sh` | 実 ZFS + PostgreSQL(proxy / lazy create / idle 停止を含む) | 数分・CI |
+| `e2e/darwin/run.sh` | macOS ネイティブ(APFS + process モード) | 手動・`make e2e-darwin` |
+| `e2e/fsx/run.sh` | FSx for OpenZFS | 手動(AWS 資源が要る) |
+| `e2e/aws/run.sh` | **実 EC2**。実 EBS への `init`、**deb 経由の導入**、Action の `transport=ssm`、`api_url` への到達 | 約 10 分・CI。push と同一リポジトリの PR のみ(fork からの PR では走らない) |
 
 いちばん下だけが見られるものがある。deb が運ぶもの(`sashikid.service` /
 `sashiki` ユーザー / ディレクトリ)、実 EBS のデバイス名、SSM が本当に届いて

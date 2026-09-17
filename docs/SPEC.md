@@ -812,7 +812,7 @@ adapter の仕事は「PR #123 → branch `pr-123`」の変換と PR コメン�
     comment: true
 ```
 
-PR open で create(fsx-zfs では常に必須。ebs-zfs は lazy create でも生えるが Action での明示 create を推奨)、synchronize では何もしない(migration の再適用は利用者が `recreate` を選ぶ)、close で delete。TTL は別途効く。
+PR open で create(fsx-zfs では常に必須。ebs-zfs は lazy create でも生えるが Action での明示 create を推奨)、synchronize(push)でも create を呼ぶ(既にあれば既存を返すだけ。migration の再適用は利用者が `recreate` を選ぶ)、close で delete。TTL は別途効く。
 
 ### 22-2. プレビュー環境への接続情報
 
@@ -873,9 +873,9 @@ DNS は「VPC 内から解決できて sashiki ホストに向く」なら何で
 
 sashiki がクライアント認証(`dev@pr-123` のパスワード検証)を**終端**し、バックエンドへは sashiki が保持する credential で接続する。
 
-- `app_user`(`engine.mysql.proxy_pass`、本番は Secrets Manager 由来)のパスワードで **mysql_native_password をサーバー側検証**(salt に対する応答を定時間比較)。合成ハンドシェイクで native を名乗るので 8.0/8.4 のデフォルト caching_sha2 クライアントも接続できる
+- `app_user` / `app_pass`(`engine.mysql.app_pass`。Linux の init はランダム生成、Terraform は Secrets Manager 由来)でクライアントを**サーバー側検証**する。合成ハンドシェイクは `caching_sha2_password` を名乗り fast-auth スクランブルを検証、`mysql_native_password` のクライアントは AuthSwitch でフォールバック(ADR-008)
 - **認証に成功してから route / lazy create**: 認証前の無償リソース確保(#7 の DoS)を構造的に解消
-- backend へは sashiki がクライアントとして native で接続し直す(認証はクライアントから不可視)
+- backend へは sashiki がクライアントとして接続し直す(caching_sha2 の full-auth は localhost 上で RSA 公開鍵手順。認証はクライアントから不可視)
 - TLS 終端は sashiki に一元化。`proxy.tls_cert` / `proxy.tls_key` 指定時に有効(クライアント↔sashiki=TLS、sashiki↔backend=localhost 平文)。SSLRequest を検出して TLS へ切替
 - クライアントは普通の MySQL 接続で済む(SNI 方式のような全クライアント TLS+SNI 対応は不要)
 
