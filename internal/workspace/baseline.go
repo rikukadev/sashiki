@@ -17,11 +17,26 @@ import (
 	"github.com/rikukadev/sashiki/internal/storage"
 )
 
+// PromoteOptions は promote の宣言(#296)。
+type PromoteOptions struct {
+	// Masked は「このブランチのデータはマスク済み」の宣言。require_masked のとき
+	// 無ければ promote を拒否する。refresh の sentinel と違い自動判定はできない
+	// (branch 上で何をしたかは sashiki には分からない)ので、operator が明示する。
+	Masked bool
+	// SkipValidate は _validate での検証を飛ばす。require_validated のときは
+	// 飛ばした時点で current にできない。
+	SkipValidate bool
+}
+
 // PromoteBranch は既存ブランチの現在の datadir を新しい baseline に昇格する(#129)。
 // branch でマイグレーション済みの状態をそのまま次の baseline にできる(git の
 // branch→main 相当)。snapshot 不変条件のため branch mysqld を graceful stop して
 // から snapshot し、完了後に再起動する。既存の他ブランチの origin は変えない。
-func (m *Manager) PromoteBranch(ctx context.Context, name string) (string, error) {
+//
+// refresh と同じ publish ポリシーを通す(#296)。以前は無条件に validated=true で
+// 登録して即 current にしていたため、require_masked / require_validated の抜け道に
+// なっていた。
+func (m *Manager) PromoteBranch(ctx context.Context, name string, opts PromoteOptions) (string, error) {
 	unlock := m.lock(name)
 	defer unlock()
 	m.baselineMu.Lock()
@@ -30,6 +45,15 @@ func (m *Manager) PromoteBranch(ctx context.Context, name string) (string, error
 	pr, ok := m.st.(storage.BranchPromoter)
 	if !ok {
 		return "", fmt.Errorf("%w: このバックエンドは promote に未対応です", ErrPreconditionFailed)
+	}
+	rc := m.resolveRefreshConfig(RefreshConfig{})
+	// 満たせないポリシーは snapshot を取る前(branch を止める前)に拒否する。
+	if rc.RequireMasked && !opts.Masked {
+		return "", fmt.Errorf("%w: promote には --masked の宣言が要ります(require_masked)。"+
+			"branch %q のデータがマスク済みなら --masked を付けてください", ErrPreconditionFailed, name)
+	}
+	if rc.RequireValidated && opts.SkipValidate {
+		return "", fmt.Errorf("%w: require_validated のため --skip-validate では current にできません", ErrPreconditionFailed)
 	}
 	b, err := m.db.GetBranch(name)
 	if err != nil {
@@ -68,13 +92,29 @@ func (m *Manager) PromoteBranch(ctx context.Context, name string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("promote snapshot: %w", err)
 	}
-	if err := m.db.RegisterBaseline(string(snap), state.BaselineProvenance{DataAsOf: tag, Validated: true}); err != nil {
+	prov := state.BaselineProvenance{DataAsOf: tag, Masked: opts.Masked}
+	if err := m.db.RegisterBaseline(string(snap), prov); err != nil {
 		return "", fmt.Errorf("promote: baseline 登録に失敗: %w", err)
+	}
+	// snapshot は取れたので branch はここで戻す。検証は candidate の clone
+	// (_validate)で行い、branch 自体は使わない。
+	restartBranch()
+
+	// refresh と同じ検証: crash recovery なしで起動できること + on-baseline-validate。
+	// 落ちたら登録は残す(validated=false のまま)が current にはしない。
+	if !opts.SkipValidate {
+		if err := m.validateCandidate(ctx, snap, rc); err != nil {
+			return "", fmt.Errorf("promote: validate: %w(%s は登録済みだが current にしていない)", err, snap)
+		}
+		prov.Validated = true
+		if err := m.db.RegisterBaseline(string(snap), prov); err != nil {
+			return "", fmt.Errorf("promote: validated 記録に失敗: %w", err)
+		}
 	}
 	if err := m.db.SetCurrentBaseline(string(snap)); err != nil {
 		return "", fmt.Errorf("promote: current baseline 設定に失敗: %w", err)
 	}
-	log.Printf("baseline promote: %s → %s (current)", name, snap)
+	log.Printf("baseline promote: %s → %s (current, masked=%v validated=%v)", name, snap, prov.Masked, prov.Validated)
 	return string(snap), nil
 }
 

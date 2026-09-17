@@ -63,12 +63,30 @@ func cmdBaseline(args []string) int {
 }
 
 // cmdBaselinePromote は既存ブランチを新 baseline に昇格する(#129)。
+// --masked は require_masked 用の宣言、--skip-validate は _validate を飛ばす(#296)。
 func cmdBaselinePromote(args []string) int {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: sashiki baseline promote <branch>")
+	body := map[string]any{}
+	var pos []string
+	for _, a := range args {
+		switch a {
+		case "--masked":
+			body["masked"] = true
+		case "--skip-validate":
+			body["skip_validate"] = true
+		default:
+			if strings.HasPrefix(a, "--") {
+				fmt.Fprintf(os.Stderr, "sashiki baseline promote: 不明なフラグ %s\n", a)
+				return exitUsage
+			}
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) != 1 {
+		fmt.Fprintln(os.Stderr, "Usage: sashiki baseline promote <branch> [--masked] [--skip-validate]")
 		return exitUsage
 	}
-	code, data, err := call("POST", "/v1/baseline/promote", map[string]any{"branch": args[0]})
+	body["branch"] = pos[0]
+	code, data, err := call("POST", "/v1/baseline/promote", body)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
@@ -79,7 +97,7 @@ func cmdBaselinePromote(args []string) int {
 	}
 	var r struct{ From, Current string }
 	_ = json.Unmarshal(data, &r)
-	fmt.Printf("promoted '%s' to current baseline: %s\n", args[0], r.Current)
+	fmt.Printf("promoted '%s' to current baseline: %s\n", pos[0], r.Current)
 	return exitOK
 }
 
@@ -151,7 +169,8 @@ func usageBaseline() int {
   sashiki baseline import-stream --from <path|s3://...|-> [--force]        書き出した baseline を zfs recv して current にする (#243)
   sashiki baseline list [--json]                                snapshot 一覧 (sashikid 経由)
   sashiki baseline refresh                                      refresh_script / source_dir で更新
-  sashiki baseline promote <branch>                             migrate 済み branch を新 baseline に昇格 (#129)
+  sashiki baseline promote <branch> [--masked] [--skip-validate] migrate 済み branch を新 baseline に昇格 (#129)。
+                                                                 require_masked なら --masked の宣言が要る (#296)
   sashiki baseline set|delete <snapshot> / build / validate / publish / gc
 `)
 	return exitUsage

@@ -306,17 +306,22 @@ func (s *Server) handleBaselineDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"deleted": req.Snapshot})
 }
 
-// handleBaselinePromote は既存ブランチを新 baseline に昇格する(#129)。body {branch}。
-// branch でマイグレーション済みの状態をそのまま current baseline にする。
+// handleBaselinePromote は既存ブランチを新 baseline に昇格する(#129)。
+// body {branch, masked?, skip_validate?}。branch でマイグレーション済みの状態を
+// そのまま current baseline にする。masked は require_masked 用の宣言(#296)。
 func (s *Server) handleBaselinePromote(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Branch string `json:"branch"`
+		Branch       string `json:"branch"`
+		Masked       bool   `json:"masked"`
+		SkipValidate bool   `json:"skip_validate"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Branch == "" {
 		writeErr(w, http.StatusBadRequest, "invalid_name", "body must be {\"branch\": \"...\"}")
 		return
 	}
-	snap, err := s.mgr.PromoteBranch(r.Context(), req.Branch)
+	snap, err := s.mgr.PromoteBranch(r.Context(), req.Branch, workspace.PromoteOptions{
+		Masked: req.Masked, SkipValidate: req.SkipValidate,
+	})
 	if err != nil {
 		s.writeError(w, err)
 		return

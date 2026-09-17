@@ -98,6 +98,9 @@ sashiki baseline promote pr-123   # pr-123 の現在の datadir を新しい cur
 ```
 
 `promote` は snapshot 不変条件のため対象ブランチを一度 graceful stop し、昇格後に再起動する(既存の他ブランチの origin は変えない)。
+promote も refresh と同じ publish ポリシーを通る: `_validate` で起動検証(`on-baseline-validate` があれば実行)し、
+落ちたら登録だけ残して current にはしない。`require_masked` を有効にしているなら、ブランチのデータが
+マスク済みであることを **`--masked` で宣言**しないと拒否される(branch 上の操作は sashiki からは見えないため自動判定しない)。
 promote したブランチは新 baseline の**実体**(snapshot)を保持するので、別の baseline を
 promote / set するまで **reset / recreate / delete は 412 で拒否**される(`list` では `!`、
 `show` では `baseline:` 行で分かる)。「promote → そのブランチで作業を続ける」なら、
