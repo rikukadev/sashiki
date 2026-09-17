@@ -651,7 +651,7 @@ func TestReapStopsButDoesNotDeleteBaselineBackingBranch(t *testing.T) {
 	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.PromoteBranch(ctx, "pr-1"); err != nil {
+	if _, err := m.PromoteBranch(ctx, "pr-1", PromoteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Millisecond)
