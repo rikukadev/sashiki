@@ -47,6 +47,22 @@ func (m *Manager) Reap(ctx context.Context) error {
 		// (仕様 13-6: TTL/lease = correctness の担保)。activeConns の判定より先に見る。
 		if b.ExpiresAt != nil && now.After(*b.ExpiresAt) &&
 			(b.State == state.StateRunning || b.State == state.StateSleeping) {
+			backing, berr := m.backingBaselinesForBranch(ctx, b)
+			if berr != nil {
+				log.Printf("reaper: baseline protection check %s: %v (保護)", b.Name, berr)
+				continue
+			}
+			if len(backing) > 0 {
+				// promote 元の実体は消せない。running のまま毎 tick Delete を拒否
+				// され続ける代わりに、一度 sleeping へ落として保持する(#289)。
+				if b.State == state.StateRunning {
+					log.Printf("reaper: stopping %s instead of lease deletion (backs baseline %v)", b.Name, backing)
+					if err := m.Sleep(ctx, b.Name); err != nil {
+						log.Printf("reaper: stop protected branch %s: %v", b.Name, err)
+					}
+				}
+				continue
+			}
 			log.Printf("reaper: deleting %s (lease expired %s ago)", b.Name, now.Sub(*b.ExpiresAt).Round(time.Second))
 			if err := m.Delete(ctx, b.Name); err != nil {
 				log.Printf("reaper: delete %s: %v", b.Name, err)
@@ -94,6 +110,20 @@ func (m *Manager) Reap(ctx context.Context) error {
 		}
 
 		if deleteDue {
+			backing, berr := m.backingBaselinesForBranch(ctx, b)
+			if berr != nil {
+				log.Printf("reaper: baseline protection check %s: %v (保護)", b.Name, berr)
+				continue
+			}
+			if len(backing) > 0 {
+				if b.State == state.StateRunning {
+					log.Printf("reaper: stopping %s instead of idle deletion (backs baseline %v)", b.Name, backing)
+					if err := m.Sleep(ctx, b.Name); err != nil {
+						log.Printf("reaper: stop protected branch %s: %v", b.Name, err)
+					}
+				}
+				continue
+			}
 			log.Printf("reaper: deleting %s (idle %s, profile %q)", b.Name, idle.Round(time.Second), b.Profile)
 			if err := m.Delete(ctx, b.Name); err != nil {
 				log.Printf("reaper: delete %s: %v", b.Name, err)

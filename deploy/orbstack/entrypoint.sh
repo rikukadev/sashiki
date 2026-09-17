@@ -20,16 +20,41 @@ fi
 # #290 より前のイメージは writable layer(/xfs.img, /var/lib/sashiki/state.db,
 # /etc/sashiki/config.yaml)に置いていた。同じコンテナを再起動した場合だけ
 # 拾えるので、あれば STORE へ移す(down していれば既に無い)。
-for pair in "/xfs.img:$IMG" "/var/lib/sashiki/state.db:$STATE_DB"; do
-  src=${pair%%:*}; dst=${pair#*:}
-  if [ -f "$src" ] && [ ! -e "$dst" ]; then
-    echo "==> migrating $src -> $dst"
-    mv "$src" "$dst"
-  fi
-done
+# overlay → volume の mv は内部的には copy+unlink で、途中停止時に欠けた dst が
+# 完成品に見える。volume 内の一時名へ copy し、同一FSの atomic rename で公開する。
+migrate_file() {
+  src=$1 dst=$2
+  [ -f "$src" ] && [ ! -e "$dst" ] || return 0
+  tmp="$dst.migrating"
+  echo "==> migrating $src -> $dst"
+  rm -f "$tmp"
+  cp -p --sparse=always "$src" "$tmp"
+  mv "$tmp" "$dst"
+  rm -f "$src"
+}
+
+migrate_file /xfs.img "$IMG"
+
+# SQLite WAL は main DB と一体。main を最後に rename して commit marker とする。
+# 途中で停止しても dst main が無ければ次回すべて copy し直せる。
+OLD_STATE_DB=/var/lib/sashiki/state.db
+if [ -f "$OLD_STATE_DB" ] && [ ! -e "$STATE_DB" ]; then
+  echo "==> migrating $OLD_STATE_DB (+ WAL/SHM) -> $STATE_DB"
+  rm -f "$STATE_DB.migrating" "$STATE_DB-wal.migrating" "$STATE_DB-shm.migrating"
+  # 前回 main の公開前に止まった場合の未完 sidecar は捨ててコピーし直す。
+  rm -f "$STATE_DB-wal" "$STATE_DB-shm"
+  cp -p --sparse=always "$OLD_STATE_DB" "$STATE_DB.migrating"
+  for suffix in -wal -shm; do
+    if [ -f "$OLD_STATE_DB$suffix" ]; then
+      cp -p --sparse=always "$OLD_STATE_DB$suffix" "$STATE_DB$suffix.migrating"
+      mv "$STATE_DB$suffix.migrating" "$STATE_DB$suffix"
+    fi
+  done
+  mv "$STATE_DB.migrating" "$STATE_DB"
+  rm -f "$OLD_STATE_DB" "$OLD_STATE_DB-wal" "$OLD_STATE_DB-shm"
+fi
 if [ -f /etc/sashiki/config.yaml ] && [ ! -L /etc/sashiki/config.yaml ] && [ ! -e "$CONFIG" ]; then
-  echo "==> migrating /etc/sashiki/config.yaml -> $CONFIG"
-  mv /etc/sashiki/config.yaml "$CONFIG"
+  migrate_file /etc/sashiki/config.yaml "$CONFIG"
 fi
 # 旧既定パスの state.db を STORE へ移した場合、config の参照も同時に直す。
 # 利用者が明示した別パスは上書きせず、旧 entrypoint の既定値だけを移行する。

@@ -215,6 +215,9 @@ func (m *Manager) Doctor(ctx context.Context) (DoctorReport, error) {
 	if checker, ok := m.eng.(engine.ListenerExposureChecker); ok {
 		instances := make([]engine.Instance, 0, len(branches))
 		for _, b := range branches {
+			if b.State != state.StateRunning {
+				continue
+			}
 			instances = append(instances, engine.Instance{Branch: b.Name, Port: b.Port})
 		}
 		exposed, err := checker.ExposedListeners(ctx, instances)
@@ -223,7 +226,8 @@ func (m *Manager) Doctor(ctx context.Context) (DoctorReport, error) {
 			add("branch listener exposure", checkWarn, "確認できません: "+err.Error())
 		case len(exposed) > 0:
 			d.ExposedListeners = exposed
-			add("branch listener exposure", checkWarn, strings.Join(exposed, "; ")+" は loopback 以外から到達可能")
+			add("branch listener exposure", checkWarn, strings.Join(exposed, "; ")+" は loopback 以外から到達可能。"+
+				"systemd 構成は `sudo sashiki init --skip-packages --yes` で unit を更新し、branch を再起動してください")
 		default:
 			add("branch listener exposure", checkOK, "loopback only")
 		}

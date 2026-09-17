@@ -945,6 +945,31 @@ func (m *Manager) refuseIfBackingBaseline(name string, vol storage.Volume, verb 
 		ErrPreconditionFailed, name, backing, verb)
 }
 
+// CheckBranchMutation は reset / recreate / delete の安価な事前条件検査。
+// API が非同期 operation を作る前に 412 を返すために使う。実操作側でも lock
+// 獲得後に同じ検査を続け、preflight 後に promote された場合の競合を防ぐ。
+func (m *Manager) CheckBranchMutation(ctx context.Context, name, verb string) error {
+	b, err := m.db.GetBranch(name)
+	if err != nil {
+		return err
+	}
+	vol, err := m.resolveVolume(ctx, b)
+	if err != nil {
+		return err
+	}
+	return m.refuseIfBackingBaseline(name, vol, verb)
+}
+
+// backingBaselinesForBranch は branch の実体上にある登録済み baseline を返す。
+// reaper は破壊を試して毎 tick 失敗する前にこれを使い、停止だけへ切り替える。
+func (m *Manager) backingBaselinesForBranch(ctx context.Context, b state.Branch) ([]string, error) {
+	vol, err := m.resolveVolume(ctx, b)
+	if err != nil {
+		return nil, err
+	}
+	return m.baselinesOnDataset(vol.Dataset)
+}
+
 // currentBaseline は DB の切り替え記録を優先し、無ければバックエンド既定を使う。
 func (m *Manager) currentBaseline() storage.SnapshotRef {
 	if snap, ok := m.db.CurrentBaselineOverride(); ok {

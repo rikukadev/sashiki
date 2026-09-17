@@ -43,11 +43,29 @@ direct_url() {
 find_asset() {
   local pattern="$1"
   curl_auth "$api" \
-    | grep -o "\"url\": *\"[^\"]*assets/[0-9]*\"\|\"name\": *\"[^\"]*\"" \
-    | paste - - \
-    | grep "$pattern" \
-    | head -1 \
-    | sed -E 's/^"url": *"([^"]*)".*"name": *"([^"]*)".*$/\1\t\2/'
+    | grep -o "\"url\"[[:space:]]*:[[:space:]]*\"[^\"]*assets/[0-9]*\"\|\"name\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
+    | awk -v pattern="$pattern" '
+        /^"url"/ {
+          url = $0
+          sub(/^"url"[[:space:]]*:[[:space:]]*"/, "", url)
+          sub(/"$/, "", url)
+          next
+        }
+        url != "" && /^"name"/ {
+          name = $0
+          sub(/^"name"[[:space:]]*:[[:space:]]*"/, "", name)
+          sub(/"$/, "", name)
+          if (!found && index(name, pattern) != 0) {
+            found = 1
+            found_url = url
+            found_name = name
+          }
+          url = ""
+        }
+        END {
+          if (found) printf "%s\t%s\n", found_url, found_name
+        }
+      '
 }
 
 # resolve NAME_IF_TAGGED PATTERN : 取得先を決める。url と name をグローバルに置く。
@@ -59,8 +77,11 @@ resolve() {
     local line
     line=$(find_asset "$2")
     url=""; name=""
-    [ -n "$line" ] && IFS=$'\t' read -r url name <<<"$line"
+    if [ -n "$line" ]; then
+      IFS=$'\t' read -r url name <<<"$line"
+    fi
   fi
+  return 0
 }
 
 # fetch URL DEST : release asset を落とす。API の asset URL は octet-stream を要求する。

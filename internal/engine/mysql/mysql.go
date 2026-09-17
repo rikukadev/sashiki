@@ -126,10 +126,13 @@ func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
 	}
 	// MYSQLD_DEFAULTS: extra_cnf 指定時は --defaults-file=<path> を出し、ユニットの
 	// ExecStart 先頭で使う(branch の mysqld にも extra_cnf を効かせる、#169)。
-	// 未指定なら空(従来どおり既定 my.cnf を読む)。
-	defaults := ""
+	// bind-address もここへ入れる。古い mysqld@.service も $MYSQLD_DEFAULTS は
+	// 展開するため、パッケージ更新後に init を再実行していないホストでも次の
+	// Start から branch listener を loopback に閉じられる(#288)。
+	defaults := "--bind-address=127.0.0.1"
 	if e.cfg.ExtraCnf != "" {
-		defaults = "--defaults-file=" + e.cfg.ExtraCnf
+		// --defaults-file は mysqld の第1引数でなければならない。
+		defaults = "--defaults-file=" + e.cfg.ExtraCnf + " " + defaults
 	}
 	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\nMYSQLD_DEFAULTS=%s\n", ins.Port, ins.DataDir, defaults)
 	if err := os.WriteFile(e.envPath(ins.Branch), []byte(env), 0o644); err != nil {

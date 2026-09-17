@@ -408,11 +408,23 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		"state_db_writable":   d.StateDBWritable,
 		"branch_count":        d.BranchCount,
 		"port_conflicts":      d.PortConflicts,
+		"exposed_listeners":   d.ExposedListeners,
 		"orphans":             d.Orphans,
 		"memory_headroom_ok":  d.MemHeadroomOK,
 		"issues":              d.Issues,
 		"checks":              d.Checks,
 	})
+}
+
+// checkBranchMutation は非同期 operation を作る前に、同期で判定できる拒否条件を
+// 返す。operation 内だけで ErrPreconditionFailed にすると HTTP は 202 になり、
+// README/API の 412 契約を満たせない(#289)。Manager 側の検査も競合対策として残す。
+func (s *Server) checkBranchMutation(w http.ResponseWriter, r *http.Request, name, verb string) bool {
+	if err := s.mgr.CheckBranchMutation(r.Context(), name, verb); err != nil {
+		s.writeError(w, err)
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleGCOrphans(w http.ResponseWriter, r *http.Request) {
@@ -576,6 +588,9 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if !s.checkBranchMutation(w, r, name, "reset") {
+		return
+	}
 	s.accepted(w, "reset", name, func(ctx context.Context) error {
 		_, e := s.mgr.Reset(ctx, name)
 		return e
@@ -584,6 +599,9 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRecreate(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if !s.checkBranchMutation(w, r, name, "recreate") {
+		return
+	}
 	s.accepted(w, "recreate", name, func(ctx context.Context) error {
 		_, e := s.mgr.Recreate(ctx, name)
 		return e
@@ -646,9 +664,8 @@ func (s *Server) handleRunHook(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	// 冪等: 存在しなければ 404(Action / CLI はこれを「既に削除済み」と扱う)。
-	if _, err := s.mgr.Get(r.Context(), name); errors.Is(err, workspace.ErrNotFound) {
-		s.writeError(w, err)
+	// 存在確認と promote 元保護を operation 作成前に行い、404 / 412 を同期で返す。
+	if !s.checkBranchMutation(w, r, name, "削除") {
 		return
 	}
 	s.accepted(w, "delete", name, func(ctx context.Context) error {

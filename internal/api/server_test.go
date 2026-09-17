@@ -60,6 +60,9 @@ func (fakeEngine) WaitReady(ctx context.Context, i engine.Instance) error { retu
 func (fakeEngine) IsRunning(ctx context.Context, i engine.Instance) (bool, error) {
 	return true, nil
 }
+func (fakeEngine) ExposedListeners(context.Context, []engine.Instance) ([]string, error) {
+	return []string{"pr-1 (10.0.0.10:3401)"}, nil
+}
 
 func newTestServer(t *testing.T, token string) *httptest.Server {
 	t.Helper()
@@ -245,6 +248,27 @@ func TestAPIBaseline(t *testing.T) {
 	}
 	if len(b.Snapshots) != 2 {
 		t.Errorf("snapshots = %v", b.Snapshots)
+	}
+}
+
+func TestAPIDoctorIncludesExposedListeners(t *testing.T) {
+	srv := newTestServer(t, "")
+	resp, err := http.Get(srv.URL + "/v1/doctor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var body struct {
+		Exposed []string `json:"exposed_listeners"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Exposed) != 1 || !strings.Contains(body.Exposed[0], "10.0.0.10:3401") {
+		t.Fatalf("exposed_listeners = %v", body.Exposed)
 	}
 }
 
@@ -460,6 +484,52 @@ func TestAPICreateWithProvenance(t *testing.T) {
 	}
 	if len(b.Source) == 0 || !strings.Contains(string(b.Source), "github_pr") {
 		t.Errorf("source round-trip failed: %s", b.Source)
+	}
+}
+
+// promote 元を壊す操作は非同期 operation に積む前に 412 を返す(#289)。
+// operation 内で拒否するだけだと HTTP は 202 になり、CLI/Action が成功と誤認する。
+func TestAPIMutationsReturn412BeforeAsyncOperation(t *testing.T) {
+	srv, db := newTestServerWithDB(t)
+	resp, err := http.Post(srv.URL+"/v1/branches", "application/json", strings.NewReader(`{"name":"pr-1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opID := resp.Header.Get("Sashiki-Operation-Id")
+	_ = resp.Body.Close()
+	if st := waitOp(t, srv, opID); st != "completed" {
+		t.Fatalf("create op state = %s, want completed", st)
+	}
+	// fakeStorage は ResolveVolume を持たず dataset="" なので、その dataset 上に
+	// baseline を登録して promote 後と同じ保護状態にする。
+	if err := db.RegisterBaseline("@baseline-promoted", state.BaselineProvenance{}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "reset", method: http.MethodPost, path: "/v1/branches/pr-1/reset"},
+		{name: "recreate", method: http.MethodPost, path: "/v1/branches/pr-1/recreate"},
+		{name: "delete", method: http.MethodDelete, path: "/v1/branches/pr-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, _ := http.NewRequest(tc.method, srv.URL+tc.path, nil)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusPreconditionFailed {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status = %d, want 412: %s", resp.StatusCode, body)
+			}
+			if got := resp.Header.Get("Sashiki-Operation-Id"); got != "" {
+				t.Errorf("refused request must not create an operation, got %q", got)
+			}
+		})
 	}
 }
 

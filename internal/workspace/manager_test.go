@@ -125,14 +125,15 @@ func (m *mockStorage) LogicalBytes(ctx context.Context, vol storage.Volume) (int
 }
 
 type mockEngine struct {
-	started   []string
-	stopped   []string
-	killed    []string
-	startErr  error
-	connCount int   // ConnCount が返す接続数(#41)
-	connErr   error // ConnCount が返すエラー
-	exposed   []string
-	exposeErr error
+	started         []string
+	stopped         []string
+	killed          []string
+	startErr        error
+	connCount       int   // ConnCount が返す接続数(#41)
+	connErr         error // ConnCount が返すエラー
+	exposed         []string
+	exposeErr       error
+	exposureChecked []engine.Instance
 }
 
 type overlapCounter struct {
@@ -178,6 +179,7 @@ func (m *mockEngine) ConnCount(ctx context.Context, ins engine.Instance) (int, e
 	return m.connCount, m.connErr
 }
 func (m *mockEngine) ExposedListeners(ctx context.Context, instances []engine.Instance) ([]string, error) {
+	m.exposureChecked = append([]engine.Instance(nil), instances...)
 	return m.exposed, m.exposeErr
 }
 
@@ -635,6 +637,43 @@ func TestReapIdleStopAndTTLDelete(t *testing.T) {
 	}
 	if _, err := m.Get(context.Background(), "pr-1"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound after TTL delete", err)
+	}
+}
+
+func TestReapStopsButDoesNotDeleteBaselineBackingBranch(t *testing.T) {
+	ctx := context.Background()
+	eng := &mockEngine{}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
+	m := newTestManagerCfg(t, st, eng, "", func(c *Config) {
+		c.IdleStopAfter = time.Nanosecond
+		c.DeleteAfterIdle = time.Nanosecond
+	})
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.PromoteBranch(ctx, "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Millisecond)
+	if err := m.Reap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	info, err := m.Get(ctx, "pr-1")
+	if err != nil {
+		t.Fatalf("baseline backing branch must survive reaper: %v", err)
+	}
+	if info.State != state.StateSleeping {
+		t.Errorf("state = %s, want sleeping", info.State)
+	}
+	if len(info.BackingBaselines) == 0 {
+		t.Error("promote source should still retain its baseline")
+	}
+	// sleeping になった後の次 tick でも Delete を試さず保持する。
+	if err := m.Reap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(ctx, "pr-1"); err != nil {
+		t.Fatalf("protected sleeping branch must survive subsequent reaper passes: %v", err)
 	}
 }
 
@@ -1166,6 +1205,11 @@ func TestDoctorReportsIssues(t *testing.T) {
 	if err := m.db.CreateBranch("pr-1", 3401, "pool/base@b1"); err != nil {
 		t.Fatal(err)
 	}
+	_ = m.db.SetState("pr-1", state.StateRunning, "")
+	if err := m.db.CreateBranch("pr-sleep", 3402, "pool/base@b1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-sleep", state.StateSleeping, "")
 	_ = m.db.RegisterBaseline("pool/base@b1", state.BaselineProvenance{})
 	_ = m.db.SetCurrentBaseline("pool/base@b1")
 	d, err := m.Doctor(context.Background())
@@ -1204,6 +1248,9 @@ func TestDoctorReportsIssues(t *testing.T) {
 	}
 	if len(d.ExposedListeners) != 1 || !strings.Contains(d.ExposedListeners[0], "10.0.0.10:3401") {
 		t.Errorf("exposed listeners = %v", d.ExposedListeners)
+	}
+	if len(eng.exposureChecked) != 1 || eng.exposureChecked[0].Branch != "pr-1" {
+		t.Errorf("listener exposure should check running branches only, got %+v", eng.exposureChecked)
 	}
 }
 

@@ -50,12 +50,15 @@ done
 # latest API の応答。asset id と名前の対応を偽 curl が引く。
 api_json() {
   local id=100
-  echo '{"tag_name":"v'"$VER"'","assets":['
+  # GitHub の実レスポンス同様、release 自体にも name がある。これを asset の
+  # name と誤って組にすると、latest 経路が別 asset を掴む(#287)。property の
+  # コロン前後も compact JSON と同じく空白無しにする。
+  echo '{"tag_name":"v'"$VER"'","name":"v'"$VER"'","assets":['
   local first=1
-  for f in "$FIX"/*; do
+  for f in "$FIX"/sashiki_* "$FIX/checksums.txt"; do
     [ $first = 1 ] || echo ','
     first=0
-    printf '{"url": "https://api.github.com/repos/rikukadev/sashiki/releases/assets/%d", "name": "%s"}' "$id" "$(basename "$f")"
+    printf '{"url":"https://api.github.com/repos/rikukadev/sashiki/releases/assets/%d","name":"%s"}' "$id" "$(basename "$f")"
     id=$((id + 1))
   done
   echo ']}'
@@ -89,7 +92,9 @@ case "$url" in
   */releases/assets/*)
     # id → name は latest.json の並び順(100 から連番)で引く
     id=${url##*/}
-    name=$(grep -o '"name": "[^"]*"' "$SASHIKI_FAKE_FIX/latest.json" | sed -n "$((id - 99))p" | cut -d'"' -f4)
+    name=$(grep -o '"url":"[^"]*"\|"name":"[^"]*"' "$SASHIKI_FAKE_FIX/latest.json" \
+      | awk '/^"url"/ { seen++ } seen == target && /^"name"/ { print; exit }' target="$((id - 99))" \
+      | cut -d'"' -f4)
     src="$SASHIKI_FAKE_FIX/$name"
     ;;
 esac
@@ -188,6 +193,20 @@ grep -q "checksums.txt に .* の行がありません" <<<"$out" || fail "行�
 $out"
 grep -q "apt-get" "$SASHIKI_FAKE_LOG" && fail "検証に落ちたのに apt-get を呼んでいる"
 cp "$WORK/sums.orig" "$FIX/checksums.txt"
+echo "  ok"
+
+# ───── 6. asset が無い場合は set -e で無言終了せず診断する ─────
+log "checksums.txt asset が無い release を診断する"
+cp "$FIX/latest.json" "$WORK/latest.orig"
+grep -v '"name":"checksums.txt"' "$WORK/latest.orig" > "$FIX/latest.json"
+DEST="$WORK/dest6"; mkdir -p "$DEST"
+if out=$(run Darwin arm64 SASHIKI_INSTALL_DIR="$DEST"); then
+  fail "checksums.txt asset が無いのに成功してしまった:
+$out"
+fi
+grep -q "checksums.txt が release に無いため検証できません" <<<"$out" || fail "欠落理由が出ていない:
+$out"
+cp "$WORK/latest.orig" "$FIX/latest.json"
 echo "  ok"
 
 log "INSTALL.SH E2E PASSED ($BASH_VERSION)"
