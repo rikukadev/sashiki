@@ -49,6 +49,11 @@ func (e *Engine) startArgs(ins engine.Instance) []string {
 		"--bind-address=127.0.0.1",
 		"--mysqlx=OFF", // X protocol の追加ポート衝突を避ける
 	}
+	// --no-defaults だと mysqld 既定(128M)になり、config の buffer_pool_size が
+	// 効かなかった(#299)。extra_cnf 側で指定したいときは buffer_pool_size を空に。
+	if e.cfg.BufferPoolBytes > 0 {
+		args = append(args, fmt.Sprintf("--innodb-buffer-pool-size=%d", e.cfg.BufferPoolBytes))
+	}
 	if os.Geteuid() == 0 {
 		args = append(args, "--user="+e.cfg.RunUser)
 	}

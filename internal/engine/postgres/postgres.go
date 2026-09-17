@@ -115,8 +115,10 @@ func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
 	if err := os.MkdirAll(e.cfg.EnvDir, 0o755); err != nil {
 		return fmt.Errorf("ensure env_dir %s: %w", e.cfg.EnvDir, err)
 	}
-	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\nPGBIN=%s\nLISTEN_ADDRESSES=%s\n",
-		ins.Port, ins.DataDir, e.cfg.BinDir, e.cfg.ListenAddresses)
+	// SHARED_BUFFERS も渡す。以前は process モードだけが shared_buffers を効かせ、
+	// systemd unit は postgres 既定のままだった(#299)。
+	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\nPGBIN=%s\nLISTEN_ADDRESSES=%s\nSHARED_BUFFERS=%s\n",
+		ins.Port, ins.DataDir, e.cfg.BinDir, e.cfg.ListenAddresses, pgSize(e.cfg.SharedBuffers))
 	if err := os.WriteFile(filepath.Join(e.cfg.EnvDir, ins.Branch+".env"), []byte(env), 0o644); err != nil {
 		return fmt.Errorf("write env: %w", err)
 	}

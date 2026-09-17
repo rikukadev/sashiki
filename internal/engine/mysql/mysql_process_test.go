@@ -128,3 +128,15 @@ func TestStopWhenAlreadyGone(t *testing.T) {
 		t.Errorf("Stop on already-gone instance should succeed, got %v", err)
 	}
 }
+
+// process モードでも buffer_pool_size が渡る(#299)。
+func TestStartArgsBufferPool(t *testing.T) {
+	e := New(Config{Mode: ModeProcess, BufferPoolBytes: 268435456})
+	args := strings.Join(e.startArgs(engine.Instance{Branch: "pr-1", DataDir: "/d", Port: 3401}), " ")
+	if !strings.Contains(args, "--innodb-buffer-pool-size=268435456") {
+		t.Errorf("args missing buffer pool: %s", args)
+	}
+	if strings.Contains(strings.Join(New(Config{Mode: ModeProcess}).startArgs(engine.Instance{DataDir: "/d"}), " "), "innodb-buffer-pool-size") {
+		t.Error("unset BufferPoolBytes must not pass the option")
+	}
+}

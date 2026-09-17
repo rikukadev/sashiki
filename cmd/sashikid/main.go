@@ -156,6 +156,8 @@ func main() {
 			MysqldBin: cfg.Engine.Mysql.MysqldBin,
 			RunUser:   cfg.Engine.Mysql.RunUser,
 			ExtraCnf:  cfg.Engine.Mysql.ExtraCnf,
+			// 見積もり(admission)と実際の mysqld を同じ値にする(#299)。
+			BufferPoolBytes: parseSize(cfg.Engine.Mysql.BufferPoolSize),
 		})
 	}
 

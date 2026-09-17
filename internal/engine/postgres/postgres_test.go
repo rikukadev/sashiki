@@ -54,6 +54,7 @@ func TestStartWritesEnvAndStartsUnit(t *testing.T) {
 		"DATADIR=/tpgpool/branches/pg-1/data\n",
 		"PGBIN=/opt/pg/bin\n",
 		"LISTEN_ADDRESSES=*\n",
+		"SHARED_BUFFERS=\n", // 未指定なら空(unit 側の既定 128MB)
 	} {
 		if !strings.Contains(env, want) {
 			t.Errorf("env file should contain %q, got:\n%s", want, env)

@@ -28,3 +28,32 @@ func TestSystemdStartWritesLoopbackBindOption(t *testing.T) {
 		t.Fatalf("env = %q, want %q", env, want)
 	}
 }
+
+// buffer_pool_size は MYSQLD_DEFAULTS 経由で systemd の mysqld に届く(#299)。
+func TestSystemdStartPassesBufferPool(t *testing.T) {
+	e := New(Config{EnvDir: t.TempDir(), Mode: ModeSystemd, BufferPoolBytes: 512 * 1024 * 1024})
+	e.run = func(context.Context, string, ...string) (string, error) { return "", nil }
+	ins := engine.Instance{Branch: "pr-1", Port: 3401, DataDir: "/data/pr-1"}
+	if err := e.Start(context.Background(), ins); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(e.envPath(ins.Branch))
+	if !strings.Contains(string(b), "--innodb-buffer-pool-size=536870912") {
+		t.Fatalf("env should carry the buffer pool size, got %q", b)
+	}
+}
+
+// unit に固定値が残っていると、それが MYSQLD_DEFAULTS より後ろに来て勝つ。
+func TestUnitDoesNotHardcodeBufferPool(t *testing.T) {
+	for _, p := range []string{"../../../deploy/systemd/mysqld@.service", "../../../cmd/sashiki/assets/mysqld@.service"} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "--innodb-buffer-pool-size") {
+				t.Errorf("%s must not hardcode innodb-buffer-pool-size: %q", p, line)
+			}
+		}
+	}
+}
