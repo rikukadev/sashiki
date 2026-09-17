@@ -47,7 +47,7 @@ func usage() int {
   sashiki show   <name> [--json]
   sashiki connect <name>
   sashiki env    <name> [--prefix P]        接続情報を KEY=VALUE で出す
-  sashiki init   --pool <p> [--device <dev>] [--engine mysql|postgres] [--skip-packages] [--yes]
+  sashiki init   --pool <p> [--device <dev>] [--engine mysql|postgres] [--app-pass <pw>] [--skip-packages] [--yes]
   sashiki baseline import|list|refresh|promote|set|delete|build|validate|publish|gc   (詳細は sashiki baseline)
   sashiki token create|list|revoke
   sashiki op list | show <id> | wait <id>

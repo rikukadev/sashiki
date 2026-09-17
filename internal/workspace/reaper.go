@@ -144,6 +144,12 @@ func (m *Manager) Reap(ctx context.Context) error {
 		} else if n > 0 {
 			log.Printf("reaper: pruned %d old operations", n)
 		}
+		// hook_runs も同じ retention で(create のたびに増える、#295)。
+		if n, err := m.db.PruneHookRuns(now.Add(-m.cfg.OperationRetention)); err != nil {
+			log.Printf("reaper: prune hook runs: %v", err)
+		} else if n > 0 {
+			log.Printf("reaper: pruned %d old hook runs", n)
+		}
 	}
 	return nil
 }

@@ -283,18 +283,15 @@ func runLocalPostgresBaselineImport(cfg config.Config, opts baselineImportOpts) 
 	if root == "" {
 		return fmt.Errorf("storage.local.root が未設定です(apfs/reflink には必須)")
 	}
-	baselineTag := cfg.Storage.Local.BaselineSnapshot
-	if baselineTag == "" {
-		baselineTag = "baseline"
+	preferredTag := cfg.Storage.Local.BaselineSnapshot
+	if preferredTag == "" {
+		preferredTag = "baseline"
 	}
 	dataDir := filepath.Join(root, "base", "data")
+	baselineTag, replacing := localBaselineTag(filepath.Join(root, "base", "snap"), preferredTag)
 	snapPath := filepath.Join(root, "base", "snap", baselineTag)
-
-	if _, err := os.Stat(snapPath); err == nil {
-		return fmt.Errorf("baseline %s は既に存在します。取得し直しは baseline refresh で対応", snapPath)
-	}
-	if entries, err := os.ReadDir(dataDir); err == nil && len(entries) > 0 {
-		return fmt.Errorf("%s が空ではありません。初期化済みの base に import はできません", dataDir)
+	if err := prepareLocalBaseData(dataDir, replacing); err != nil {
+		return err
 	}
 
 	// root(コンテナ)なら run_user へ降格する。非 root(macOS ネイティブの

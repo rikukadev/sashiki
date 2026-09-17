@@ -97,10 +97,10 @@ func TestHookRuns(t *testing.T) {
 
 func TestTokens(t *testing.T) {
 	db := openTest(t)
-	if err := db.CreateToken("gha", "hash1"); err != nil {
+	if err := db.CreateToken("gha", "hash1", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.CreateToken("gha", "hash2"); err == nil {
+	if err := db.CreateToken("gha", "hash2", ""); err == nil {
 		t.Error("duplicate name should fail")
 	}
 	ok, err := db.CheckTokenHash("hash1")

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -54,6 +55,12 @@ type Runner struct {
 	Dir     string        // /etc/sashiki/hooks
 	LogDir  string        // /var/log/sashiki/hooks
 	Timeout time.Duration // 既定 10 分
+	// StripEnv は hook に渡さない環境変数名(#295)。hook は sashikid の環境を
+	// 継承する(PATH や proxy 設定、migrate に要る変数を引き継ぐため)が、
+	// API トークンのような sashikid 自身の秘密まで見せる理由は無い。
+	StripEnv []string
+	// LogRetention より古い hook ログは次の実行時に消す(既定 30 日、0 で無効)。
+	LogRetention time.Duration
 	// now はテストで固定するための時計。
 	now func() time.Time
 }
@@ -63,7 +70,51 @@ func NewRunner(dir, logDir string, timeout time.Duration) *Runner {
 	if timeout == 0 {
 		timeout = 10 * time.Minute
 	}
-	return &Runner{Dir: dir, LogDir: logDir, Timeout: timeout, now: time.Now}
+	return &Runner{
+		Dir: dir, LogDir: logDir, Timeout: timeout, now: time.Now,
+		StripEnv:     []string{"SASHIKI_API_TOKEN"},
+		LogRetention: 30 * 24 * time.Hour,
+	}
+}
+
+// inheritedEnv は sashikid の環境から StripEnv を除いたものを返す。
+func (r *Runner) inheritedEnv() []string {
+	strip := map[string]bool{}
+	for _, k := range r.StripEnv {
+		if k != "" {
+			strip[k] = true
+		}
+	}
+	var out []string
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if strip[k] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// pruneLogs は LogRetention より古い hook ログを消す(best-effort、#295)。
+// ローテーションが無いと create のたびに増え続ける。
+func (r *Runner) pruneLogs() {
+	if r.LogRetention <= 0 {
+		return
+	}
+	entries, err := os.ReadDir(r.LogDir)
+	if err != nil {
+		return
+	}
+	cutoff := r.now().Add(-r.LogRetention)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
+			continue
+		}
+		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(r.LogDir, e.Name()))
+		}
+	}
 }
 
 // Find はイベント名に一致する実行可能ファイルを探す(拡張子は見ない)。
@@ -110,6 +161,7 @@ func (r *Runner) Run(ctx context.Context, event Event, env Env) (Result, error) 
 	if err := os.MkdirAll(r.LogDir, 0o755); err != nil {
 		return Result{}, err
 	}
+	r.pruneLogs()
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		return Result{}, err
@@ -122,7 +174,7 @@ func (r *Runner) Run(ctx context.Context, event Event, env Env) (Result, error) 
 	cmd := exec.CommandContext(cctx, path)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(r.inheritedEnv(),
 		"SASHIKI_EVENT="+string(event),
 		"SASHIKI_BRANCH="+env.Branch,
 		fmt.Sprintf("SASHIKI_PORT=%d", env.Port),

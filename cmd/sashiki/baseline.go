@@ -63,12 +63,30 @@ func cmdBaseline(args []string) int {
 }
 
 // cmdBaselinePromote は既存ブランチを新 baseline に昇格する(#129)。
+// --masked は require_masked 用の宣言、--skip-validate は _validate を飛ばす(#296)。
 func cmdBaselinePromote(args []string) int {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: sashiki baseline promote <branch>")
+	body := map[string]any{}
+	var pos []string
+	for _, a := range args {
+		switch a {
+		case "--masked":
+			body["masked"] = true
+		case "--skip-validate":
+			body["skip_validate"] = true
+		default:
+			if strings.HasPrefix(a, "--") {
+				fmt.Fprintf(os.Stderr, "sashiki baseline promote: 不明なフラグ %s\n", a)
+				return exitUsage
+			}
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) != 1 {
+		fmt.Fprintln(os.Stderr, "Usage: sashiki baseline promote <branch> [--masked] [--skip-validate]")
 		return exitUsage
 	}
-	code, data, err := call("POST", "/v1/baseline/promote", map[string]any{"branch": args[0]})
+	body["branch"] = pos[0]
+	code, data, err := call("POST", "/v1/baseline/promote", body)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
@@ -79,7 +97,7 @@ func cmdBaselinePromote(args []string) int {
 	}
 	var r struct{ From, Current string }
 	_ = json.Unmarshal(data, &r)
-	fmt.Printf("promoted '%s' to current baseline: %s\n", args[0], r.Current)
+	fmt.Printf("promoted '%s' to current baseline: %s\n", pos[0], r.Current)
 	return exitOK
 }
 
@@ -151,7 +169,8 @@ func usageBaseline() int {
   sashiki baseline import-stream --from <path|s3://...|-> [--force]        書き出した baseline を zfs recv して current にする (#243)
   sashiki baseline list [--json]                                snapshot 一覧 (sashikid 経由)
   sashiki baseline refresh                                      refresh_script / source_dir で更新
-  sashiki baseline promote <branch>                             migrate 済み branch を新 baseline に昇格 (#129)
+  sashiki baseline promote <branch> [--masked] [--skip-validate] migrate 済み branch を新 baseline に昇格 (#129)。
+                                                                 require_masked なら --masked の宣言が要る (#296)
   sashiki baseline set|delete <snapshot> / build / validate / publish / gc
 `)
 	return exitUsage
@@ -168,7 +187,7 @@ type baselineImportOpts struct {
 }
 
 func cmdBaselineImport(args []string) int {
-	opts := baselineImportOpts{configPath: "/etc/sashiki/config.yaml", threads: runtime.NumCPU()}
+	opts := baselineImportOpts{configPath: defaultConfigPath(), threads: runtime.NumCPU()}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--from":
@@ -223,7 +242,12 @@ func cmdBaselineImport(args []string) int {
 			return exitError
 		}
 	}
-	cfg, err := config.Load(opts.configPath)
+	cfgPath, err := requireConfigPath(opts.configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sashiki baseline import: config: %v\n", err)
 		return exitError
@@ -450,18 +474,15 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	if root == "" {
 		return fmt.Errorf("storage.local.root が未設定です(apfs/reflink には必須)")
 	}
-	baselineTag := cfg.Storage.Local.BaselineSnapshot
-	if baselineTag == "" {
-		baselineTag = "baseline"
+	preferredTag := cfg.Storage.Local.BaselineSnapshot
+	if preferredTag == "" {
+		preferredTag = "baseline"
 	}
 	dataDir := filepath.Join(root, "base", "data")
+	baselineTag, replacing := localBaselineTag(filepath.Join(root, "base", "snap"), preferredTag)
 	snapPath := filepath.Join(root, "base", "snap", baselineTag)
-
-	if _, err := os.Stat(snapPath); err == nil {
-		return fmt.Errorf("baseline %s は既に存在します。取得し直しは baseline refresh で対応", snapPath)
-	}
-	if entries, err := os.ReadDir(dataDir); err == nil && len(entries) > 0 {
-		return fmt.Errorf("%s が空ではありません。初期化済みの base に import はできません", dataDir)
+	if err := prepareLocalBaseData(dataDir, replacing); err != nil {
+		return err
 	}
 
 	// root(コンテナ)なら mysqld を mysql ユーザーに落として動かし、datadir も
@@ -531,9 +552,7 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	}
 	fmt.Printf("→ 接続ユーザー %s 作成\n", cfg.Engine.Mysql.ProxyUser)
 	plugin := authPluginFor(mysqlBin, sock)
-	createUser := fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH %s BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
-		cfg.Engine.Mysql.ProxyUser, plugin, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
+	createUser := createAppUserSQL(cfg.Engine.Mysql.ProxyUser, plugin, cfg.Engine.Mysql.ProxyPass)
 	if out, err := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e", createUser).CombinedOutput(); err != nil {
 		return fmt.Errorf("create user: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -562,6 +581,32 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	registerImportedBaseline(cfg.StateDB, string(snap), baselineTag)
 	fmt.Println("baseline import 完了。sashiki create <name> でブランチを作れます")
 	return nil
+}
+
+// prepareLocalBaseData は base/data を import できる状態にする。replacing
+// (既存 baseline があり新 tag で取り直す)なら中身を空にする。base/data は
+// snapshot の元でしかなく、ブランチは snapshot からの clone なので消しても
+// 失うものは無い。initialize 済みで replacing でない(= init 直後に import を
+// 呼んだ)場合も同じ扱いにする(#293: darwin init は base を作り終えている)。
+func prepareLocalBaseData(dataDir string, replacing bool) error {
+	if replacing {
+		fmt.Println("→ 既存 baseline は残し、新しい tag で取り直す(current を切り替える)")
+	}
+	if entries, err := os.ReadDir(dataDir); err == nil && len(entries) > 0 {
+		if fileExists(filepath.Join(dataDir, "mysqld.pid")) || fileExists(filepath.Join(dataDir, "postmaster.pid")) {
+			return fmt.Errorf("%s で DB が動いています。止めてから import してください", dataDir)
+		}
+		fmt.Printf("→ %s を初期化し直す\n", dataDir)
+		if err := os.RemoveAll(dataDir); err != nil {
+			return fmt.Errorf("clear %s: %w", dataDir, err)
+		}
+	}
+	return nil
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
@@ -662,9 +707,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	// proxy は client 認証を自前検証し、backend へは選んだプラグインで接続し直す
 	// (caching_sha2 の平文 TCP cold cache は RSA full-auth、native は AuthSwitch)。
 	plugin := authPluginFor(mysqlBin, sock)
-	createUser := fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH %s BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
-		cfg.Engine.Mysql.ProxyUser, plugin, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
+	createUser := createAppUserSQL(cfg.Engine.Mysql.ProxyUser, plugin, cfg.Engine.Mysql.ProxyPass)
 	userCmd := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e", createUser)
 	if out, err := userCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("create user: %w: %s", err, strings.TrimSpace(string(out)))
@@ -713,6 +756,21 @@ func mysqlClientBin(mysqldBin, name string) string {
 // registerImportedBaseline は import した baseline を state.db に current として
 // 登録する(仕様 12-1)。import 本体は成功しているので登録失敗は致命ではないが、
 // 黙って握りつぶすと baseline list / GC の台帳から漏れるため warning を出す(#150)。
+// createAppUserSQL は app ユーザーを作る SQL。ユーザー名とパスワードは
+// MySQL の文字列リテラルとしてエスケープする(引用符や \ を含む --app-pass で
+// 壊れない、#310 review)。plugin は authPluginFor が返す固定候補なのでそのまま。
+func createAppUserSQL(userName, plugin, pass string) string {
+	return fmt.Sprintf(
+		"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH %s BY %s; GRANT ALL PRIVILEGES ON *.* TO %s@'%%'; FLUSH PRIVILEGES;",
+		mysqlLiteral(userName), plugin, mysqlLiteral(pass), mysqlLiteral(userName))
+}
+
+// mysqlLiteral は s を MySQL の単一引用符リテラルにする。
+func mysqlLiteral(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `'`, `\'`, "\x00", `\0`, "\n", `\n`, "\r", `\r`)
+	return "'" + r.Replace(s) + "'"
+}
+
 func registerImportedBaseline(stateDB, snap, dataAsOf string) {
 	db, err := state.Open(stateDB)
 	if err != nil {

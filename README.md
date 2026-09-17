@@ -98,6 +98,9 @@ sashiki baseline promote pr-123   # pr-123 の現在の datadir を新しい cur
 ```
 
 `promote` は snapshot 不変条件のため対象ブランチを一度 graceful stop し、昇格後に再起動する(既存の他ブランチの origin は変えない)。
+promote も refresh と同じ publish ポリシーを通る: `_validate` で起動検証(`on-baseline-validate` があれば実行)し、
+落ちたら登録だけ残して current にはしない。`require_masked` を有効にしているなら、ブランチのデータが
+マスク済みであることを **`--masked` で宣言**しないと拒否される(branch 上の操作は sashiki からは見えないため自動判定しない)。
 promote したブランチは新 baseline の**実体**(snapshot)を保持するので、別の baseline を
 promote / set するまで **reset / recreate / delete は 412 で拒否**される(`list` では `!`、
 `show` では `baseline:` 行で分かる)。「promote → そのブランチで作業を続ける」なら、
@@ -108,8 +111,11 @@ promote / set するまで **reset / recreate / delete は 412 で拒否**され
 ```bash
 sudo systemctl enable --now sashikid
 sashiki create pr-1
-mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306   # :3306 固定エンドポイント経由で接続
+mysql -udev@pr-1 -p -h 127.0.0.1 -P3306   # :3306 固定エンドポイント経由で接続
 ```
+
+パスワードは `init` がランダム生成して表示したもの(`/etc/sashiki/config.yaml` の `app_pass`)。
+固定したいときは `sudo sashiki init --app-pass <値>`。macOS ネイティブとコンテナは開発用途なので既定 `dev` のまま。
 
 ### macOS ネイティブ(VM 無し)
 
@@ -130,7 +136,11 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306
 ```
 
 `init --platform darwin` は root 不要。既定のルートは `~/Library/Application Support/sashiki`
-(`--root` で変更可)。詳細と Lima/worktree 連動は [docs/LOCAL-DEV.md](docs/LOCAL-DEV.md)。
+(Postgres は `sashiki-pg`。`--root` で変更可)。`baseline import` / `token` などの CLI は
+そこにある `config.yaml` を自動で使う(`--config` / `SASHIKI_CONFIG` で上書き可)ので、
+Linux 手順と同じコマンドがそのまま通る。`init` が作った空の baseline は残り、
+`baseline import --from dump.sql` は新しい tag で取って current を切り替える。
+`sashiki token` も darwin では root 不要。詳細と Lima/worktree 連動は [docs/LOCAL-DEV.md](docs/LOCAL-DEV.md)。
 
 > 実測(20GB baseline, Apple Silicon): create 1〜3s / reset 1.3〜2.5s / recreate 〜3.5s。
 
@@ -179,6 +189,18 @@ API(= sashikid)への認証は「**ローカルは素通し、外から叩くと
 | **手動** | ホスト上で root が `sudo sashiki token create --name ci` | **平文は 1 回だけ表示**(DB には SHA-256 ハッシュのみ)。表示された値を利用側へ配る |
 | **Terraform** | モジュールが `random_password` で生成 | SSM SecureString(出力 `api_token_ssm_path`)に保存。利用側は SSM から取得 |
 
+### トークンで何ができるか(scope)
+
+| scope | できること | 想定 |
+|---|---|---|
+| `branches`(`token create` の既定) | ブランチの create / reset / recreate / delete / retry / lease / sleep / wake、一覧・詳細・operation・capacity の読み取り | CI / GitHub Action に配る |
+| `admin` | 上に加え、baseline の build / validate / publish / set / promote / delete / gc、`drain`、`gc --orphans`、**データブラウザ(任意 SQL)**、hook の手動実行 | 運用者 |
+
+loopback からの無認証アクセスと、`SASHIKI_API_TOKEN` 環境変数で渡すトークン(Terraform 生成)は `admin`。
+CI に配るのは `branches` にしておくと、GitHub Secrets が漏れても baseline の差し替えや
+任意 SQL(app_user は MySQL `GRANT ALL` / Postgres `SUPERUSER` なので OS コマンド実行に等しい)までは届かない。
+データブラウザと hook 手動実行は「誰が何を流したか」を sashikid のログに残す。
+
 ### どう使うか(利用側)
 
 CLI / Action は次のどちらかでトークンを読む(env が優先):
@@ -195,6 +217,15 @@ GitHub Action なら `secrets.SASHIKI_API_TOKEN` を渡すだけ(下の使い方
 - サーバー側は、起動時に `SASHIKI_API_TOKEN` で渡した 1 個(後方互換)か、`sashiki token` で発行した state.db のトークン(ハッシュ照合)を検証する。
 - ローテーションは **新規発行 → 配布先を差し替え → 旧トークンを `sashiki token revoke`**。
 - ⚠️ 認証免除は「接続元が loopback か」で判定する。**リバースプロキシ越しに公開すると接続元が 127.0.0.1 に見えて素通しになる**ため、外部公開時は sashikid を直接 listen させるか、**`auth.trust_loopback: false`** を設定して loopback でも Bearer トークンを必須にすること。
+
+### proxy(:3306)側の既定値
+
+API とは別に、DB クライアントが繋ぐ proxy は **app パスワード 1 つ**で認証を終端する。既定の組み合わせを知っておくこと:
+
+- `listen.proxy: 0.0.0.0:3306` — 全 IF で待つ。SG / ファイアウォールで到達元を絞る
+- `branches.lazy_create: true` — **未知のブランチ名で接続すると、認証後にそのブランチを作る**(`max_branches` まで)。Action で明示的に create する運用なら `false` にできる
+- `app_pass` — Linux の `init` はランダム生成、macOS / コンテナは `dev`。パスワードを知る人は誰でも lazy create できるので、`dev` のまま外に出さない
+- 認証失敗が続く接続元は次の試行を**検証の前に**待たせる(5 回まで即時、以降 1s → 8s)。同時試行は接続元ごとに 8 まで。正しいパスワードで通れば解除
 
 ## 3 つの使い方
 
@@ -278,7 +309,7 @@ Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したと�
 
 ## 機能
 
-- **branch lifecycle**: create / reset / recreate / delete / retry(hook 失敗などからの再実行)
+- **branch lifecycle**: create / reset / recreate / delete / retry(create / reset / recreate / wake が途中で失敗したブランチを `error` から再実行。残骸は掃除して origin から作り直す)
 - **profile / lease**: 用途ごとの idle lifecycle(preview / ci / sandbox)+ `--ttl` / `lease renew` の絶対期限
 - **proxy(:3306 固定エンドポイント)**: `mysql -udev@<branch>` でルーティング。**認証終端(方式A)**——sashiki がパスワードを検証し、**認証後に** lazy create(認証前のリソース確保を防ぐ)。TLS 終端対応(`proxy.tls_cert`)
 - **アイドル管理**: 無接続で mysqld 停止(`sleeping`)、再接続で起床。engine ポーリングで接続を追跡するので proxy を通らない接続でも正しく判定。TTL / lease で自動削除
@@ -332,7 +363,10 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 1. **baseline の作り方** — 本番データのコピー →(必要なら)マスク → 投入 → 正常終了 → snapshot。
    `sashiki baseline import`(初回)/ `baseline refresh`(更新、`source_dir` に SQL を置くだけでも可)
 2. **on-create hook** — ブランチ作成時に migration / seed を適用するスクリプト。ORM(Rails / Django /
-   Prisma 等)の migrate コマンドを呼ぶだけ。`@init` 取得前に走るので reset でも保持され、recreate で再適用される
+   Prisma 等)の migrate コマンドを呼ぶだけ。`@init` 取得前に走るので reset でも保持され、recreate で再適用される。
+   hook は sashikid と同じユーザー・環境で走る(`SASHIKI_*` で branch の port / datadir 等を受け取る。
+   一覧は [docs/SPEC.md](docs/SPEC.md) 16 章)。sashikid の環境変数を継承するが API トークンは渡さない。
+   ログは `<log_dir>/hooks/` に 30 日、`hook_runs` は `operation_retention` で掃除される
 3. **profile / lease** の設定 — 用途ごとの寿命(preview / ci / sandbox)
 
 「設定 3 行で完成」ではなく「1 日で組めるフレームワーク」と考えてほしい。
@@ -377,7 +411,7 @@ A. profile は「無接続が続いたら止める/消す」寿命ポリシー(p
 
 **Q. PostgreSQL は?**
 
-A. engine として対応。**proxy(固定エンドポイント)と lazy create も MySQL と同様に動く**(SCRAM-SHA-256 で認証終端)。idle 管理は engine ポーリングで両対応。baseline import / `init` の自動構築はまだ MySQL のみで、Postgres の baseline は手動で用意する([#230](https://github.com/rikukadev/sashiki/issues/230) で対応中)。
+A. engine として対応。**proxy(固定エンドポイント)と lazy create も MySQL と同様に動く**(SCRAM-SHA-256 で認証終端)。idle 管理は engine ポーリングで両対応(app ロールで `pg_stat_activity` を読む。取得に失敗し続けるブランチは保護され回収されないので、sashikid のログの `connpoll` 警告を見る)。baseline import / `init` の自動構築はまだ MySQL のみで、Postgres の baseline は手動で用意する([#230](https://github.com/rikukadev/sashiki/issues/230) で対応中)。
 
 **Q. FSx バックエンドはいつ使う?**
 

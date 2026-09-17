@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/rikukadev/sashiki/internal/authlimit"
 	"io"
 	"log"
 	"net"
@@ -53,9 +54,11 @@ type Config struct {
 
 // Server は PostgreSQL プロトコルプロキシ。
 type Server struct {
-	cfg    Config
-	router Router
-	nameRe *regexp.Regexp
+	// limiter は接続元ごとの認証失敗 backoff(#297)。
+	limiter *authlimit.Limiter
+	cfg     Config
+	router  Router
+	nameRe  *regexp.Regexp
 
 	mu    sync.Mutex
 	conns map[string]int
@@ -84,7 +87,7 @@ func New(cfg Config, router Router) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{cfg: cfg, router: router, nameRe: re, conns: map[string]int{}, cancels: map[cancelKey]string{}}, nil
+	return &Server{cfg: cfg, router: router, nameRe: re, conns: map[string]int{}, cancels: map[cancelKey]string{}, limiter: authlimit.New()}, nil
 }
 
 // Listen は接続を受け付ける。ctx キャンセルで停止。
@@ -176,9 +179,22 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	}
 
 	// 認証終端: app パスワードで検証する。ここを通るまで branch に触れない。
+	// 総当たり対策(#297): 同一接続元の同時試行を絞り、失敗が続いていれば
+	// 検証の前に待たせる(検証後に遅らせるだけだと並列接続で迂回できる)。
+	src := authlimit.Key(client.RemoteAddr())
+	if !s.limiter.Acquire(src) {
+		return fatal(client, "53300", "too many concurrent authentication attempts")
+	}
+	defer s.limiter.Release(src)
+	authlimit.Sleep(ctx, s.limiter.Penalty(src))
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err := s.verifyClientSCRAM(client); err != nil {
+		s.limiter.Fail(src)
 		return fatal(client, "28P01", fmt.Sprintf("password authentication failed for user %q", rawUser))
 	}
+	s.limiter.Reset(src)
 
 	// 認証済み → branch 解決(必要なら lazy create)
 	port, err := s.router.RouteBranch(ctx, branch)

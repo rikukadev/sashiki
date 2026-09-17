@@ -5,12 +5,17 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"text/template"
 )
 
@@ -28,6 +33,9 @@ type initOpts struct {
 	platform     string // linux(既定) | darwin
 	root         string // darwin: storage.local.root(既定 ~/Library/Application Support/sashiki)
 	engine       string // mysql(既定) | postgres(#224)
+	// appPass は config に書く app_pass。Linux では未指定ならランダム生成する(#297)。
+	// darwin は dev 用途なので既定 dev のまま。
+	appPass string
 }
 
 // initStep は 1 ステップ。done が true を返したらスキップする。
@@ -71,6 +79,12 @@ func cmdInit(args []string) int {
 				return usage()
 			}
 			opts.engine = args[i]
+		case "--app-pass":
+			i++
+			if i >= len(args) {
+				return usage()
+			}
+			opts.appPass = args[i]
 		case "--skip-packages":
 			opts.skipPackages = true
 		case "--yes", "-y":
@@ -86,6 +100,19 @@ func cmdInit(args []string) int {
 		fmt.Fprintln(os.Stderr, "sashiki init: root で実行してください (sudo sashiki init ...)")
 		return exitError
 	}
+	// app_pass の既定 "dev" は、proxy を 0.0.0.0:3306 で開き lazy create が既定 ON の
+	// Linux 構成では「到達できる誰でもブランチを作れる」状態になる(#297)。
+	// 明示が無ければランダムに作り、config に書いて 1 回だけ表示する。
+	generatedPass := false
+	if opts.appPass == "" {
+		pass, err := randomPassword()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "sashiki init: app_pass 生成:", err)
+			return exitError
+		}
+		opts.appPass = pass
+		generatedPass = true
+	}
 
 	var steps []initStep
 	switch opts.engine {
@@ -98,6 +125,9 @@ func cmdInit(args []string) int {
 		fmt.Fprintf(os.Stderr, "sashiki init: --engine %q は未対応です (mysql | postgres)\n", opts.engine)
 		return exitError
 	}
+	// config が既にあれば app_pass は上書きしない(冪等)。表示も出さない。
+	_, statErr := os.Stat("/etc/sashiki/config.yaml")
+	configExisted := statErr == nil
 	fmt.Printf("sashiki init: engine=%s pool=%s device=%s\n", opts.engine, opts.pool, orDash(opts.device))
 	if !opts.yes {
 		fmt.Print("続行する? [y/N]: ")
@@ -132,6 +162,13 @@ init 完了。次のステップ:
   2. sashikid を起動: systemctl enable --now sashikid
   3. ブランチを作る: sashiki create pr-1
 `, dump)
+	if generatedPass && !configExisted {
+		fmt.Printf(`
+app パスワード(接続ユーザー dev の -p に使う。/etc/sashiki/config.yaml の app_pass):
+  %s
+固定したいときは sashiki init --app-pass <値> で指定できる。
+`, opts.appPass)
+	}
 	return exitOK
 }
 
@@ -243,27 +280,129 @@ func initSteps(opts initOpts) []initStep {
 			name: "/etc/sashiki/config.yaml 生成",
 			done: func() bool { _, err := os.Stat("/etc/sashiki/config.yaml"); return err == nil },
 			run: func() error {
-				cfg, err := renderConfig(opts.pool)
+				cfg, err := renderConfigApp(opts.pool, opts.appPass)
 				if err != nil {
 					return err
 				}
-				return os.WriteFile("/etc/sashiki/config.yaml", cfg, 0o644)
+				return writeConfigFile("/etc/sashiki/config.yaml", cfg)
 			},
 		},
+		configPermStep("/etc/sashiki/config.yaml"),
 	)
 	return steps
 }
 
 func renderConfig(pool string) ([]byte, error) {
+	return renderConfigApp(pool, "dev")
+}
+
+// renderConfigApp は app_pass を指定して config を生成する(#297)。
+func renderConfigApp(pool, appPass string) ([]byte, error) {
 	t, err := template.New("config").Parse(configTmpl)
 	if err != nil {
 		return nil, err
 	}
 	var buf bytes.Buffer
-	if err := t.Execute(&buf, struct{ Pool string }{Pool: pool}); err != nil {
+	if err := t.Execute(&buf, struct {
+		Pool    string
+		AppPass string
+	}{Pool: pool, AppPass: yamlQuote(appPass)}); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// writeConfigFile は app_pass を含む config を書き、権限を揃える(#295)。
+func writeConfigFile(path string, data []byte) error {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	return fixConfigPerm(path)
+}
+
+// configPerm は config に付けたい権限。sashikid は User=sashiki で動くので
+// root:sashiki 0640。sashiki グループが無い環境(ソースから入れて root 直起動)
+// では root:root 0600 — other に読ませる理由は無い(#310 review)。
+func configPerm() (mode os.FileMode, gid int) {
+	g, err := user.LookupGroup("sashiki")
+	if err != nil {
+		return 0o600, 0
+	}
+	n, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return 0o600, 0
+	}
+	return 0o640, n
+}
+
+// configPermOK は path が configPerm の状態か。
+func configPermOK(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	mode, gid := configPerm()
+	if st.Mode().Perm() != mode {
+		return false
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		return true
+	}
+	return int(sys.Uid) == 0 && int(sys.Gid) == gid
+}
+
+// fixConfigPerm は既存 config の内容には触れず権限だけ揃える。init を再実行した
+// 既存環境(生成ステップは「済み」でスキップされる)にも #295 を効かせるため。
+func fixConfigPerm(path string) error {
+	mode, gid := configPerm()
+	if err := os.Chown(path, 0, gid); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
+}
+
+// configPermStep は既存 config の権限を揃える冪等ステップ。
+func configPermStep(path string) initStep {
+	return initStep{
+		name: path + " の権限 (root:sashiki 0640 / 無ければ 0600)",
+		done: func() bool { return configPermOK(path) },
+		run:  func() error { return fixConfigPerm(path) },
+	}
+}
+
+// yamlQuote は文字列を YAML の二重引用符リテラルにする。--app-pass に `: ` や
+// ` #` や引用符が入っても生成 config が壊れず、読まれる値が表示と一致する
+// (#310 review)。
+func yamlQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// randomPassword は app_pass 用の乱数(hex 32 文字)を返す。YAML でクォート不要な
+// 文字だけにする。
+func randomPassword() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw), nil
 }
 
 // --- helpers ---

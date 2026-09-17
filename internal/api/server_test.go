@@ -281,7 +281,7 @@ func TestAPIAuthWithDBToken(t *testing.T) {
 
 	// トークン登録(平文 "sashiki_abc" のハッシュ)
 	sum := sha256.Sum256([]byte("sashiki_abc"))
-	if err := db.CreateToken("t1", hex.EncodeToString(sum[:])); err != nil {
+	if err := db.CreateToken("t1", hex.EncodeToString(sum[:]), ""); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/v1/branches", nil)

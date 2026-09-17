@@ -44,6 +44,14 @@ func classify(stage string, err error) (code string, recoverable bool, suggestio
 		return CodeSnapshotError, false, []string{
 			"datadir を掴んだままのプロセスが無いか確認",
 		}
+	case stage == "rollback", stage == "stash", stage == "quota", stage == "stop":
+		// reset / recreate の途中段階(#292)。どれも作業をやり直せば整う:
+		// rollback は冪等、stash(rename 退避)は失敗しても旧が残る、stop は
+		// retry 時に Kill する。
+		return CodeStorageError, true, []string{
+			"storage のログを確認(zfs: journalctl -u sashikid)",
+			"`sashiki retry <branch>` で再実行",
+		}
 	default:
 		return CodeStorageError, false, []string{"ログを確認して手動対応が必要"}
 	}
@@ -77,7 +85,7 @@ func (m *Manager) Retry(ctx context.Context, name string) (Info, error) {
 		return m.Wake(ctx, name)
 	case "create":
 		// 失敗した create は残骸を掃除して origin から作り直す(recreate 相当)。
-		return m.recreateFrom(ctx, b, storage.SnapshotRef(b.OriginSnapshot), hooks.OnCreate)
+		return m.recreateFrom(ctx, b, storage.SnapshotRef(b.OriginSnapshot), hooks.OnCreate, "create")
 	default:
 		return Info{}, fmt.Errorf("cannot retry operation %q", b.FailedOp)
 	}

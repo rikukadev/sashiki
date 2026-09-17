@@ -18,6 +18,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"github.com/rikukadev/sashiki/internal/authlimit"
 	"io"
 	"log"
 	"net"
@@ -60,7 +61,9 @@ type Server struct {
 	cfg    Config
 	router Router
 	nameRe *regexp.Regexp
-	connID atomic.Uint32
+	// limiter は接続元ごとの認証失敗 backoff(#297)。
+	limiter *authlimit.Limiter
+	connID  atomic.Uint32
 
 	mu    sync.Mutex
 	conns map[string]int
@@ -81,7 +84,7 @@ func New(cfg Config, router Router) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{cfg: cfg, router: router, nameRe: re, conns: map[string]int{}}, nil
+	return &Server{cfg: cfg, router: router, nameRe: re, conns: map[string]int{}, limiter: authlimit.New()}, nil
 }
 
 // Listen は接続を受け付ける。ctx キャンセルで停止。
@@ -197,6 +200,17 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	//    (認証前 lazy create の DoS 構造を解消 — #7 / #51)。
 	// クライアントの応答長で認証方式を判別する(#197): 32byte=caching_sha2
 	// (MySQL 8.0 既定 / 9.x)、20byte=mysql_native_password(旧クライアント)。
+	// 総当たり対策(#297)。同一接続元の同時試行を絞り、失敗が続いていれば
+	// **検証の前に**待たせる。検証後に遅らせるだけだと並列接続で迂回できる。
+	src := authlimit.Key(client.RemoteAddr())
+	if !s.limiter.Acquire(src) {
+		return authErr(client, seq+1, 1040, "08004", "Too many concurrent authentication attempts")
+	}
+	defer s.limiter.Release(src)
+	authlimit.Sleep(ctx, s.limiter.Penalty(src))
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	sha2 := len(hr.authResp) != 20
 	verified := false
 	if sha2 {
@@ -205,9 +219,11 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 		verified = verifyNativePassword(s.cfg.AppPassword, salt, hr.authResp)
 	}
 	if !verified {
+		s.limiter.Fail(src)
 		return authErr(client, seq+1, 1045, "28000",
 			fmt.Sprintf("Access denied for user '%s'@'%s' (using password: YES)", user, branch))
 	}
+	s.limiter.Reset(src)
 
 	// 4. 認証済み → branch 解決(必要なら lazy create)
 	port, err := s.router.RouteBranch(ctx, branch)

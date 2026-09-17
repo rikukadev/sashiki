@@ -651,7 +651,7 @@ func TestReapStopsButDoesNotDeleteBaselineBackingBranch(t *testing.T) {
 	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.PromoteBranch(ctx, "pr-1"); err != nil {
+	if _, err := m.PromoteBranch(ctx, "pr-1", PromoteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Millisecond)
@@ -1673,7 +1673,7 @@ func TestPromoteBranch(t *testing.T) {
 	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := m.PromoteBranch(ctx, "pr-1")
+	snap, err := m.PromoteBranch(ctx, "pr-1", PromoteOptions{})
 	if err != nil {
 		t.Fatalf("PromoteBranch: %v", err)
 	}
@@ -1706,7 +1706,7 @@ func TestDeleteRefusesBranchBackingBaseline(t *testing.T) {
 	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.PromoteBranch(ctx, "pr-1"); err != nil {
+	if _, err := m.PromoteBranch(ctx, "pr-1", PromoteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	// pr-1 の dataset 上に baseline があるので delete は precondition で拒否。
@@ -1737,7 +1737,7 @@ func TestResetAndRecreateRefuseBranchBackingBaseline(t *testing.T) {
 	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := m.PromoteBranch(ctx, "pr-1")
+	snap, err := m.PromoteBranch(ctx, "pr-1", PromoteOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1783,7 +1783,7 @@ func TestPromoteBranchRestartsOnFailure(t *testing.T) {
 	}
 	startsBefore := len(eng.started)
 
-	if _, err := m.PromoteBranch(ctx, "pr-1"); err == nil {
+	if _, err := m.PromoteBranch(ctx, "pr-1", PromoteOptions{}); err == nil {
 		t.Fatal("PromoteBranch はエラーを返すはず")
 	}
 	// snapshot のため一度停止し、失敗後も再起動していること。

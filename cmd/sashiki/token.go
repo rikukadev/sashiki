@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/rikukadev/sashiki/internal/config"
@@ -20,11 +21,18 @@ func cmdToken(args []string) int {
 		return usageToken()
 	}
 	sub, rest := args[0], args[1:]
-	if os.Geteuid() != 0 {
+	cfgPath, err := requireConfigPath(tokenConfigPath(rest))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki token:", err)
+		return exitError
+	}
+	// state.db が /etc・/var 配下(Linux の systemd 構成)なら root が要る。
+	// macOS ネイティブは自分の Application Support 配下なので不要(#293)。
+	if os.Geteuid() != 0 && strings.HasPrefix(cfgPath, "/etc/") {
 		fmt.Fprintln(os.Stderr, "sashiki token: root で実行してください")
 		return exitError
 	}
-	cfg, err := config.Load(tokenConfigPath(rest))
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki token: config:", err)
 		return exitError
@@ -50,7 +58,11 @@ func cmdToken(args []string) int {
 
 func usageToken() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  sashiki token create --name <name>   発行 (平文は 1 回だけ表示)
+  sashiki token create --name <name> [--scope branches|admin]
+                                       発行 (平文は 1 回だけ表示)。既定 branches (#294):
+                                         branches = ブランチの create/reset/recreate/delete/lease と読み取り
+                                         admin    = 上に加え baseline publish/promote、drain、gc、
+                                                    データブラウザ(任意 SQL)、hook 手動実行
   sashiki token list
   sashiki token revoke <name>
 `)
@@ -63,19 +75,27 @@ func tokenConfigPath(args []string) string {
 			return args[i+1]
 		}
 	}
-	return "/etc/sashiki/config.yaml"
+	return defaultConfigPath()
 }
 
 func cmdTokenCreate(db *state.DB, args []string) int {
-	name := ""
+	name, scope := "", state.ScopeBranches
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--name" && i+1 < len(args) {
+		switch {
+		case args[i] == "--name" && i+1 < len(args):
 			name = args[i+1]
+			i++
+		case args[i] == "--scope" && i+1 < len(args):
+			scope = args[i+1]
 			i++
 		}
 	}
 	if name == "" {
 		return usageToken()
+	}
+	if scope != state.ScopeBranches && scope != state.ScopeAdmin {
+		fmt.Fprintf(os.Stderr, "sashiki token: --scope は branches | admin (got %q)\n", scope)
+		return exitUsage
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -84,11 +104,11 @@ func cmdTokenCreate(db *state.DB, args []string) int {
 	}
 	tok := "sashiki_" + hex.EncodeToString(raw)
 	sum := sha256.Sum256([]byte(tok))
-	if err := db.CreateToken(name, hex.EncodeToString(sum[:])); err != nil {
+	if err := db.CreateToken(name, hex.EncodeToString(sum[:]), scope); err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki token:", err)
 		return exitError
 	}
-	fmt.Printf("token '%s' を発行しました。この平文は二度と表示されません:\n\n  %s\n\nGitHub Secrets 等に保存してください。\n", name, tok)
+	fmt.Printf("token '%s' (scope %s) を発行しました。この平文は二度と表示されません:\n\n  %s\n\nGitHub Secrets 等に保存してください。\n", name, scope, tok)
 	return exitOK
 }
 
@@ -99,13 +119,13 @@ func cmdTokenList(db *state.DB) int {
 		return exitError
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "NAME\tCREATED\tLAST_USED")
+	_, _ = fmt.Fprintln(tw, "NAME\tSCOPE\tCREATED\tLAST_USED")
 	for _, t := range tokens {
 		last := "-"
 		if t.LastUsedAt != nil {
 			last = t.LastUsedAt.Format("2006-01-02 15:04")
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", t.Name, t.CreatedAt.Format("2006-01-02 15:04"), last)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", t.Name, t.Scope, t.CreatedAt.Format("2006-01-02 15:04"), last)
 	}
 	_ = tw.Flush()
 	return exitOK

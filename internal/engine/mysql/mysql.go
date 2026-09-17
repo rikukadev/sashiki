@@ -110,6 +110,12 @@ func (e *Engine) clientBin(name string) string {
 	return name
 }
 
+// clientEnv は mysql / mysqladmin に渡す環境。パスワードは -p ではなく MYSQL_PWD で
+// 渡す。-p だと ready 判定と毎分の ConnCount で `ps` に平文が載る(#295)。
+func (e *Engine) clientEnv() []string {
+	return append(os.Environ(), "MYSQL_PWD="+e.cfg.ProxyPass)
+}
+
 func (e *Engine) envPath(branch string) string {
 	return filepath.Join(e.cfg.EnvDir, branch+".env")
 }
@@ -176,8 +182,9 @@ func (e *Engine) WaitReady(ctx context.Context, ins engine.Instance) error {
 			return err
 		}
 		cmd := exec.CommandContext(ctx, e.clientBin("mysqladmin"),
-			"-u"+e.cfg.ProxyUser, "-p"+e.cfg.ProxyPass,
+			"-u"+e.cfg.ProxyUser,
 			"-h127.0.0.1", fmt.Sprintf("-P%d", ins.Port), "ping")
+		cmd.Env = e.clientEnv()
 		if err := cmd.Run(); err == nil {
 			return nil
 		}
@@ -201,9 +208,10 @@ func (e *Engine) IsRunning(ctx context.Context, ins engine.Instance) (bool, erro
 // クライアント)の接続を1つ差し引く。sudo は不要(TCP で dev ユーザー接続)。
 func (e *Engine) ConnCount(ctx context.Context, ins engine.Instance) (int, error) {
 	cmd := exec.CommandContext(ctx, e.clientBin("mysql"),
-		"-u"+e.cfg.ProxyUser, "-p"+e.cfg.ProxyPass,
+		"-u"+e.cfg.ProxyUser,
 		"-h127.0.0.1", fmt.Sprintf("-P%d", ins.Port),
 		"-N", "-B", "-e", "SHOW STATUS LIKE 'Threads_connected'")
+	cmd.Env = e.clientEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		return 0, fmt.Errorf("mysql show status (port %d): %w", ins.Port, err)

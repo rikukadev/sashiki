@@ -131,7 +131,8 @@ func cmdInitDarwinPostgres(opts initOpts) int {
 				if err != nil {
 					return err
 				}
-				return os.WriteFile(configPath, data, 0o644)
+				// app_pass を含むので所有者のみ(#295)。
+				return os.WriteFile(configPath, data, 0o600)
 			},
 		},
 		{
@@ -185,7 +186,8 @@ init 完了 (darwin/postgres)。sashikid は launchd で常駐しています。
   停止:      launchctl unload ~/Library/LaunchAgents/dev.sashiki.sashikid-pg.plist
 
 本番相当のデータを入れるなら(root 不要、ログインユーザーで実行):
-  sashiki baseline import --from dump.sql --db app --config %s
+  sashiki baseline import --from dump.sql --db app
+  (config は %s を自動で使う。init が作った baseline は残り、新しい tag で current を切り替える)
 `, configPath)
 	return exitOK
 }

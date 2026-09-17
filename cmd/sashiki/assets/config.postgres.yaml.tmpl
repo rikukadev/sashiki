@@ -33,7 +33,7 @@ engine:
     # app_user / app_pass は baseline import が作る接続ロール。proxy はこの
     # パスワードを SCRAM-SHA-256 で検証してから backend へ繋ぎ直す(#222)。
     app_user: dev
-    app_pass: dev
+    app_pass: {{.AppPass}}   # init がランダム生成(--app-pass で固定可)
     # per-branch の <branch>.env は sashikid(User=sashiki)が書き、
     # postgres-sashiki@.service が読む。/run/sashiki は sashikid.service の
     # RuntimeDirectory=sashiki で sashiki 所有として作られる(#177)。

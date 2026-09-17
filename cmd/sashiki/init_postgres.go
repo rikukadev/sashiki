@@ -114,13 +114,14 @@ func initStepsPostgres(opts initOpts) []initStep {
 			name: "/etc/sashiki/config.yaml 生成 (engine: postgres)",
 			done: func() bool { _, err := os.Stat("/etc/sashiki/config.yaml"); return err == nil },
 			run: func() error {
-				cfg, err := renderPostgresConfig(opts.pool)
+				cfg, err := renderPostgresConfigApp(opts.pool, opts.appPass)
 				if err != nil {
 					return err
 				}
-				return os.WriteFile("/etc/sashiki/config.yaml", cfg, 0o644)
+				return writeConfigFile("/etc/sashiki/config.yaml", cfg)
 			},
 		},
+		configPermStep("/etc/sashiki/config.yaml"),
 	)
 	return steps
 }
@@ -128,6 +129,11 @@ func initStepsPostgres(opts initOpts) []initStep {
 // renderPostgresConfig は postgres 用 config を生成する。bin_dir は実際に
 // インストールされている版から解決する(バージョンをハードコードしない)。
 func renderPostgresConfig(pool string) ([]byte, error) {
+	return renderPostgresConfigApp(pool, "dev")
+}
+
+// renderPostgresConfigApp は app_pass を指定して postgres 用 config を生成する(#297)。
+func renderPostgresConfigApp(pool, appPass string) ([]byte, error) {
 	t, err := template.New("config").Parse(configPostgresTmpl)
 	if err != nil {
 		return nil, err
@@ -141,7 +147,8 @@ func renderPostgresConfig(pool string) ([]byte, error) {
 	if err := t.Execute(&buf, struct {
 		Pool     string
 		PgBinDir string
-	}{Pool: pool, PgBinDir: binDir}); err != nil {
+		AppPass  string
+	}{Pool: pool, PgBinDir: binDir, AppPass: yamlQuote(appPass)}); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
