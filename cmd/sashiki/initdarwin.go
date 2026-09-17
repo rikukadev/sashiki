@@ -122,7 +122,8 @@ func cmdInitDarwin(opts initOpts) int {
 				if err != nil {
 					return err
 				}
-				return os.WriteFile(configPath, data, 0o644)
+				// app_pass を含むので所有者のみ(#295)。
+				return os.WriteFile(configPath, data, 0o600)
 			},
 		},
 		{

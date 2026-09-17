@@ -756,6 +756,21 @@ func (d *DB) RecoverInterruptedOperations() (int64, error) {
 	return n, nil
 }
 
+// PruneHookRuns は finished_at が before より古い hook_runs を削除する(#295)。
+// 各 (branch, event) の最新 1 件は LastHookStatus が参照するので残す。
+func (d *DB) PruneHookRuns(before time.Time) (int64, error) {
+	res, err := d.sql.Exec(
+		`DELETE FROM hook_runs
+		  WHERE finished_at IS NOT NULL AND finished_at < ?
+		    AND id NOT IN (SELECT MAX(id) FROM hook_runs GROUP BY branch, event)`,
+		before.UTC().Format(timeFmt))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // PruneOperations は finished_at が before より古い完了/失敗 operation を削除し、
 // 削除件数を返す(operations テーブルの無限成長を防ぐ。reaper から呼ぶ #83)。
 func (d *DB) PruneOperations(before time.Time) (int64, error) {

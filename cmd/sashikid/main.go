@@ -170,6 +170,9 @@ func main() {
 	}
 
 	hr := hooks.NewRunner(cfg.Hooks.Dir, cfg.Hooks.LogDir, cfg.Hooks.Timeout)
+	// API トークンを hook に見せない(#295)。auth.api_token_env で名前を変えて
+	// いても落とす。
+	hr.StripEnv = append(hr.StripEnv, cfg.Auth.APITokenEnv)
 
 	mgr, err := workspace.New(workspace.Config{
 		NamePattern:        cfg.Branches.NamePattern,

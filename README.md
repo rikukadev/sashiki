@@ -347,7 +347,10 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 1. **baseline の作り方** — 本番データのコピー →(必要なら)マスク → 投入 → 正常終了 → snapshot。
    `sashiki baseline import`(初回)/ `baseline refresh`(更新、`source_dir` に SQL を置くだけでも可)
 2. **on-create hook** — ブランチ作成時に migration / seed を適用するスクリプト。ORM(Rails / Django /
-   Prisma 等)の migrate コマンドを呼ぶだけ。`@init` 取得前に走るので reset でも保持され、recreate で再適用される
+   Prisma 等)の migrate コマンドを呼ぶだけ。`@init` 取得前に走るので reset でも保持され、recreate で再適用される。
+   hook は sashikid と同じユーザー・環境で走る(`SASHIKI_*` で branch の port / datadir 等を受け取る。
+   一覧は [docs/SPEC.md](docs/SPEC.md) 16 章)。sashikid の環境変数を継承するが API トークンは渡さない。
+   ログは `<log_dir>/hooks/` に 30 日、`hook_runs` は `operation_retention` で掃除される
 3. **profile / lease** の設定 — 用途ごとの寿命(preview / ci / sandbox)
 
 「設定 3 行で完成」ではなく「1 日で組めるフレームワーク」と考えてほしい。
