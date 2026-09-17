@@ -7,6 +7,14 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.10.1](https://github.com/rikukadev/sashiki/compare/v0.10.0...v0.10.1) (2026-09-17)
+
+
+### Bug Fixes
+
+* README監査で判明したCritical不具合を修正する ([#309](https://github.com/rikukadev/sashiki/issues/309)) ([e563948](https://github.com/rikukadev/sashiki/commit/e563948a45ae8d2ee723210085a3d4149612fa4d))
+* README監査で判明したHigh不具合を修正する ([#310](https://github.com/rikukadev/sashiki/issues/310)) ([ae6ddbd](https://github.com/rikukadev/sashiki/commit/ae6ddbd343f7a977036b0a787b555a6f32d836a5))
+
 ## [0.10.0](https://github.com/rikukadev/sashiki/compare/v0.9.2...v0.10.0) (2026-09-13)
 
 
