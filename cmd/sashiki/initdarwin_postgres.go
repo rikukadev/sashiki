@@ -174,11 +174,12 @@ func cmdInitDarwinPostgres(opts initOpts) int {
 		}
 	}
 
-	// CLI(create/show/delete)は config ではなく API を見る。mysql 版と
-	// ポートが違う構成もあり得るので SASHIKI_API_URL を明示して案内する。
+	// CLI(create/show/delete)は config ではなく API を見る。Postgres 版は
+	// MySQL 版と同時に常駐できるよう API を 8081 にしている(#304)ので、
+	// SASHIKI_API_URL を明示して案内する。
 	fmt.Printf(`
-init 完了 (darwin/postgres)。sashikid は launchd で常駐しています。
-  export SASHIKI_API_URL=http://127.0.0.1:8080
+init 完了 (darwin/postgres)。sashikid は launchd で常駐しています(API は :8081)。
+  export SASHIKI_API_URL=http://127.0.0.1:8081
 
   ブランチ:  sashiki create pr-1
   接続:      PGPASSWORD=dev psql -h 127.0.0.1 -p 5432 -U 'dev@pr-1' -d app

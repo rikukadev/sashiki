@@ -186,20 +186,23 @@ engine:
     app_pass: dev
 ```
 
-baseline は `sashiki baseline import --from dump.sql --db app --config <root>/config.yaml`
-で作れる(プレーン SQL / `pg_dump` のカスタム形式・ディレクトリ形式に対応)。
+baseline は `sashiki baseline import --from dump.sql --db app`
+で作れる(config は `~/Library/Application Support/sashiki-pg/config.yaml` を自動で使う。
+MySQL 版の config も併存するなら `--config` か `SASHIKI_CONFIG` で指定する)(プレーン SQL / `pg_dump` のカスタム形式・ディレクトリ形式に対応)。
 接続は `listen.proxy` を設定すれば `psql -U 'dev@pr-1'` の固定エンドポイント経由、
 未設定ならブランチごとの直ポート(`sashiki show <name>`)。
 
 一括セットアップは **`sashiki init --platform darwin --engine postgres`**(#238)。
 Homebrew の postgresql を検出(版は数値順で最新)→ `initdb` → 接続ロール `dev` と
 `app` データベース作成 → 正常終了 → clonefile で baseline 取得 → config 生成 →
-launchd 常駐(ラベル `dev.sashiki.sashikid-pg` なので MySQL 版と共存できる)。
+launchd 常駐。ラベル `dev.sashiki.sashikid-pg`、API `:8081`、metrics `:9101` で、
+MySQL 版(`:8080` / `:9100`、proxy `:3306`)と同時に常駐できる(#304)。CLI はどちらの
+sashikid を操作するかを `SASHIKI_API_URL` で選ぶ(既定は MySQL 版の `:8080`)。
 
 ```bash
 brew install postgresql@17
 sashiki init --platform darwin --engine postgres --yes
-export SASHIKI_API_URL=http://127.0.0.1:8080
+export SASHIKI_API_URL=http://127.0.0.1:8081
 PGPASSWORD=dev psql -h 127.0.0.1 -p 5432 -U 'dev@pr-1' -d app   # 未作成でも接続時に生える
 ```
 

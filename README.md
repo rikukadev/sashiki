@@ -136,7 +136,7 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306
 ```
 
 `init --platform darwin` は root 不要。既定のルートは `~/Library/Application Support/sashiki`
-(Postgres は `sashiki-pg`。`--root` で変更可)。`baseline import` / `token` などの CLI は
+(Postgres は `sashiki-pg`、API は `:8081` なので MySQL 版と同時に常駐できる。`--root` で変更可)。`baseline import` / `token` などの CLI は
 そこにある `config.yaml` を自動で使う(`--config` / `SASHIKI_CONFIG` で上書き可)ので、
 Linux 手順と同じコマンドがそのまま通る。`init` が作った空の baseline は残り、
 `baseline import --from dump.sql` は新しい tag で取って current を切り替える。
