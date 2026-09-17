@@ -12,6 +12,9 @@ RuntimeDirectoryMode=0755
 EnvironmentFile=-/etc/sashiki/sashikid.env
 ExecStart=/usr/local/bin/sashikid --config /etc/sashiki/config.yaml
 Restart=on-failure
+# 停止時、sashikid は実行中の operation(create / reset / delete …)を最大 10 分待つ
+# (#303)。systemd 既定の 90 秒で SIGKILL されると途中で死ぬので、それより長くする。
+TimeoutStopSec=660
 
 [Install]
 WantedBy=multi-user.target

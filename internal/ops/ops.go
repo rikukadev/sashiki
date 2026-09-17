@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/rikukadev/sashiki/internal/state"
@@ -39,17 +40,66 @@ func errInfo(runErr error) (code, msg string) {
 	return code, runErr.Error()
 }
 
+// ErrInProgress は同じ対象に実行中の排他 operation があることを表す(#303)。
+var ErrInProgress = errors.New("operation already in progress for this target")
+
 // Runner は operation の起動と追跡を担う。
 type Runner struct {
 	store Store
 	// newID はテストで固定するための ID 生成器。
 	newID func() string
 	now   func() time.Time
+
+	mu        sync.Mutex
+	exclusive map[string]string // target → 実行中の排他 operation id
+	wg        sync.WaitGroup    // 実行中の非同期 operation(Drain 用)
 }
 
 // New は Runner を作る。
 func New(store Store) *Runner {
-	return &Runner{store: store, newID: randomID, now: time.Now}
+	return &Runner{store: store, newID: randomID, now: time.Now, exclusive: map[string]string{}}
+}
+
+// StartExclusive は target に実行中の排他 operation があれば ErrInProgress を返し、
+// 無ければ Start する(#303)。ブランチの reset / recreate / delete などは同名に
+// 対して直列に待つだけで、連打すると全部 202 で受理されて順に全部実行されていた。
+// 返す id は実行中のもの(ErrInProgress のとき)か新しいもの。
+func (r *Runner) StartExclusive(typ, target string, fn func(ctx context.Context) error) (string, error) {
+	r.mu.Lock()
+	if id, busy := r.exclusive[target]; busy {
+		r.mu.Unlock()
+		return id, fmt.Errorf("%w: %s (operation %s)", ErrInProgress, target, id)
+	}
+	r.exclusive[target] = "" // Start 中に割り込まれないよう先に確保
+	r.mu.Unlock()
+
+	id, err := r.start(typ, target, fn, func() {
+		r.mu.Lock()
+		delete(r.exclusive, target)
+		r.mu.Unlock()
+	})
+	r.mu.Lock()
+	if err != nil {
+		delete(r.exclusive, target)
+	} else if _, still := r.exclusive[target]; still {
+		r.exclusive[target] = id
+	}
+	r.mu.Unlock()
+	return id, err
+}
+
+// Drain は実行中の非同期 operation が終わるまで最大 timeout 待ち、終わったら true。
+// sashikid の停止時に呼ぶ(#303)。operation は context.Background で動いているので、
+// 待たずにプロセスが終わると create / reset が途中で死に、次回起動で interrupted になる。
+func (r *Runner) Drain(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() { r.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 func randomID() string {
@@ -77,12 +127,18 @@ func (r *Runner) logOperation(id, typ, target string, start time.Time, err error
 // Start は typ/target の operation を作り、fn をバックグラウンドで実行する。
 // operation id を即座に返す(呼び出し側は 202 で返す)。
 func (r *Runner) Start(typ, target string, fn func(ctx context.Context) error) (string, error) {
+	return r.start(typ, target, fn, nil)
+}
+
+func (r *Runner) start(typ, target string, fn func(ctx context.Context) error, onDone func()) (string, error) {
 	id := r.newID()
 	if err := r.store.CreateOperation(id, typ, target); err != nil {
 		return "", err
 	}
 	start := r.now()
+	r.wg.Add(1)
 	go func() {
+		defer r.wg.Done()
 		// operation はリクエストのライフサイクルから切り離す(fsx は数分かかる)。
 		ctx := context.Background()
 		var runErr error
@@ -95,6 +151,11 @@ func (r *Runner) Start(typ, target string, fn func(ctx context.Context) error) (
 			}()
 			runErr = fn(ctx)
 		}()
+		// 排他を解いてから completed を記録する。逆だと、CLI の --wait が完了を見て
+		// すぐ次の操作を送ったときに一瞬 409 になる(#303)。
+		if onDone != nil {
+			onDone()
+		}
 		code, errMsg := errInfo(runErr)
 		_ = r.store.FinishOperation(id, code, errMsg)
 		r.logOperation(id, typ, target, start, runErr)

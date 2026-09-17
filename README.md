@@ -257,6 +257,12 @@ sashiki delete demo
 `show --json | jq` の配管を各所に書かせないためで、環境変数として渡す先
 (CI・アプリ)が求めるのは JSON ではなく `KEY=VALUE` だから。
 
+同じブランチに実行中の変更操作(create / reset / recreate / retry / delete)があるあいだ、
+次の変更は **409 `operation_in_progress`**(CLI は終了コード 4)で断る。`--wait`(既定)で
+完了を待ってから次を叩けば当たらない。`sashiki doctor` / `gc --orphans` は状態を読むだけで、
+実行中の操作を書き換えない(中断の回収は sashikid の起動時だけ)。sashikid は停止時に
+実行中の操作を最大 10 分待つ。
+
 `env` が出すのは **そのまま繋がる 3 つ組**(host / port / user)だけ。
 内部ポート(`engine_port`)は調査用なので混ぜない。パスワードも出さない —
 払い出し対象ではないし、「表示しただけ」のつもりの操作が CI のログに

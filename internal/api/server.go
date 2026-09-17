@@ -105,6 +105,9 @@ func (s *Server) SetProxyListen(addr string) {
 	s.proxyPort = n
 }
 
+// Ops は配線済みの operation Runner を返す(停止時の Drain 用。未配線なら nil)。
+func (s *Server) Ops() *ops.Runner { return s.ops }
+
 // SetOps は operation Runner を配線する(sashikid 起動時)。
 func (s *Server) SetOps(r *ops.Runner) {
 	s.ops = r
@@ -134,7 +137,18 @@ func (s *Server) accepted(w http.ResponseWriter, typ, target string, fn func(con
 		writeJSON(w, http.StatusAccepted, map[string]any{"operation_id": "", "status": "accepted"})
 		return
 	}
-	opID, err := s.ops.Start(typ, target, fn)
+	// ブランチ操作は同名に実行中の operation があれば 409(#303)。baseline 検証は
+	// 対象が snapshot なので従来どおり。
+	start := s.ops.Start
+	if typ != "baseline-validate" {
+		start = s.ops.StartExclusive
+	}
+	opID, err := start(typ, target, fn)
+	if errors.Is(err, ops.ErrInProgress) {
+		setOpID(w, opID)
+		writeErr(w, http.StatusConflict, "operation_in_progress", err.Error())
+		return
+	}
 	if err != nil {
 		s.writeError(w, err)
 		return

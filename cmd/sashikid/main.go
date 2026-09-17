@@ -345,7 +345,19 @@ func main() {
 	if err := srv.Listen(ctx, cfg.Listen.API); err != nil {
 		log.Fatal(err)
 	}
+	// 停止時は実行中の operation(create / reset / recreate / delete …)を待つ(#303)。
+	// 待たずに終わると途中で死に、次回起動で interrupted → 手動 retry / delete に
+	// なっていた。sashikid.service の TimeoutStopSec はこれより長くしてある。
+	if r := srv.Ops(); r != nil {
+		log.Printf("sashikid: waiting for in-flight operations (up to %s)", drainTimeout)
+		if !r.Drain(drainTimeout) {
+			log.Printf("sashikid: operations still running after %s; they will be marked interrupted on next start", drainTimeout)
+		}
+	}
 }
+
+// drainTimeout は停止時に実行中の operation を待つ上限(#303)。
+const drainTimeout = 10 * time.Minute
 
 // slogWriter は既存の log.Printf 出力を slog(JSON)へ橋渡しする。
 type slogWriter struct{}

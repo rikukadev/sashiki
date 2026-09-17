@@ -177,6 +177,10 @@ type Manager struct {
 	baselinePolicy RefreshConfig
 	// baseline の set / GC / publish を直列化する(Fix 3)。
 	baselineMu sync.Mutex
+	// admitMu は create の「上限・ポート・メモリの判定 → 行の挿入」を直列化する
+	// (#303)。branch 名ごとの lock しか無く、別名の同時 create が同じポートを
+	// 選んで 2 件目が SQLite の UNIQUE 違反(500)になり、max_branches も超えられた。
+	admitMu sync.Mutex
 	// reapLogged は reaper が同じ理由で繰り返し失敗したときに毎 tick ログを
 	// 吐かないための直近メッセージ(#298)。reaper goroutine だけが触る。
 	reapLogged map[string]string
@@ -319,24 +323,6 @@ func (m *Manager) CreateWithMetaFrom(ctx context.Context, name string, port int,
 	if _, err := m.db.GetBranch(name); err == nil {
 		return Info{}, ErrExists
 	}
-	all, err := m.db.ListBranches()
-	if err != nil {
-		return Info{}, err
-	}
-	if m.cfg.MaxBranches > 0 && len(all) >= m.cfg.MaxBranches {
-		return Info{}, ErrLimitReached
-	}
-	p, err := m.allocPort(port)
-	if err != nil {
-		return Info{}, err
-	}
-	if err := m.admitMemory("create"); err != nil {
-		return Info{}, err
-	}
-	if err := m.admitStorage(ctx, "create"); err != nil {
-		return Info{}, err
-	}
-
 	origin := m.currentBaseline()
 	if baseline != "" {
 		if _, gerr := m.db.GetBaseline(baseline); gerr != nil {
@@ -344,7 +330,30 @@ func (m *Manager) CreateWithMetaFrom(ctx context.Context, name string, port int,
 		}
 		origin = storage.SnapshotRef(baseline)
 	}
-	if err := m.db.CreateBranch(name, p, string(origin)); err != nil {
+	// 上限・ポート・admission の判定から行の挿入までを 1 つの区間にする(#303)。
+	// 挿入した行(creating)は次の判定で数に入る。
+	if err := func() error {
+		m.admitMu.Lock()
+		defer m.admitMu.Unlock()
+		all, err := m.db.ListBranches()
+		if err != nil {
+			return err
+		}
+		if m.cfg.MaxBranches > 0 && len(all) >= m.cfg.MaxBranches {
+			return ErrLimitReached
+		}
+		p, err := m.allocPort(port)
+		if err != nil {
+			return err
+		}
+		if err := m.admitMemory("create"); err != nil {
+			return err
+		}
+		if err := m.admitStorage(ctx, "create"); err != nil {
+			return err
+		}
+		return m.db.CreateBranch(name, p, string(origin))
+	}(); err != nil {
 		return Info{}, err
 	}
 	if meta != (state.Meta{}) {
@@ -828,9 +837,11 @@ func (m *Manager) admitMemory(op string) error {
 		if err != nil {
 			return err
 		}
+		// creating / resetting も mysqld を起動している(または起動する)ので数える(#303)。
 		running := 0
 		for _, b := range branches {
-			if b.State == state.StateRunning {
+			switch b.State {
+			case state.StateRunning, state.StateCreating, state.StateResetting:
 				running++
 			}
 		}
