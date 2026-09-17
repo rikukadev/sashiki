@@ -140,6 +140,8 @@ func main() {
 			RunUser:         cfg.Engine.Postgres.RunUser,
 			SharedBuffers:   cfg.Engine.Postgres.SharedBuffers,
 			LogDir:          cfg.LogDir,
+			AppUser:         cfg.AppUser(),
+			AppPass:         cfg.AppPass(),
 		})
 		// postgres の idle 回収は #41 の capability 判定(下)に一本化した。
 		// postgres は ConnCounter を実装しているので connpoll が last_conn_at を

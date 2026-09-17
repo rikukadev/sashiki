@@ -47,6 +47,12 @@ type Config struct {
 	// LogDir は process モードのサーバログの置き場(既定 os.TempDir())。
 	// datadir 配下に置くと snapshot に入ってしまうので外に出す。
 	LogDir string
+	// AppUser / AppPass は ConnCount が pg_stat_activity を読むときの接続ロール
+	// (baseline import が作る app ロール、既定 dev)。initdb は
+	// --auth-host=scram-sha-256 なので、パスワード無しの postgres ロールでは
+	// 127.0.0.1 に繋げず、idle 停止が一度も発火しなかった(#291)。
+	AppUser string
+	AppPass string
 }
 
 const (
@@ -73,6 +79,9 @@ func New(cfg Config) *Engine {
 	}
 	if cfg.ReadyTimeout == 0 {
 		cfg.ReadyTimeout = 30 * time.Second
+	}
+	if cfg.AppUser == "" {
+		cfg.AppUser = "dev"
 	}
 	e := &Engine{cfg: cfg}
 	e.run = e.execCmd
@@ -167,15 +176,14 @@ func (e *Engine) IsRunning(ctx context.Context, ins engine.Instance) (bool, erro
 
 // ConnCount は現在のクライアント接続数を返す(engine.ConnCounter, #41)。
 // pg_stat_activity から client backend を数え、自分(このポーラ)の接続は除く。
-// 127.0.0.1 への接続が pg_hba で許可されている前提(base の pg_hba.conf に
-// host 行を入れておく。パッケージ doc 参照)。認証情報を持たないため -w で
-// 即失敗させ、失敗時はポーラ側で「判定不能=使用中」として保護する。
+// app ロール(dev)で 127.0.0.1 に繋ぐ。baseline import が initdb を
+// --auth-host=scram-sha-256 で作り、app ロールにパスワードを持たせるので、
+// 追加の pg_hba 設定なしで通る(#291)。-w でプロンプトを禁じ、失敗時は
+// ポーラ側で「判定不能=使用中」として保護する。
 func (e *Engine) ConnCount(ctx context.Context, ins engine.Instance) (int, error) {
-	psql := filepath.Join(e.cfg.BinDir, "psql")
-	cmd := exec.CommandContext(ctx, psql,
-		"-h", "127.0.0.1", "-p", strconv.Itoa(ins.Port),
-		"-U", "postgres", "-d", "postgres", "-w", "-tAc",
-		"SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend' AND pid <> pg_backend_pid()")
+	args := e.connCountArgs(ins)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.Env = e.clientEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		return 0, fmt.Errorf("psql pg_stat_activity (port %d): %w", ins.Port, err)
@@ -185,4 +193,19 @@ func (e *Engine) ConnCount(ctx context.Context, ins engine.Instance) (int, error
 		return 0, fmt.Errorf("parse count %q: %w", strings.TrimSpace(string(out)), err)
 	}
 	return n, nil
+}
+
+// connCountArgs は ConnCount が実行する psql のコマンドライン。
+func (e *Engine) connCountArgs(ins engine.Instance) []string {
+	return []string{
+		filepath.Join(e.cfg.BinDir, "psql"),
+		"-h", "127.0.0.1", "-p", strconv.Itoa(ins.Port),
+		"-U", e.cfg.AppUser, "-d", "postgres", "-w", "-tAc",
+		"SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend' AND pid <> pg_backend_pid()",
+	}
+}
+
+// clientEnv は psql に渡す環境。パスワードは argv でなく PGPASSWORD で渡す。
+func (e *Engine) clientEnv() []string {
+	return append(os.Environ(), "PGPASSWORD="+e.cfg.AppPass)
 }

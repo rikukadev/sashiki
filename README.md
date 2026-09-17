@@ -411,7 +411,7 @@ A. profile は「無接続が続いたら止める/消す」寿命ポリシー(p
 
 **Q. PostgreSQL は?**
 
-A. engine として対応。**proxy(固定エンドポイント)と lazy create も MySQL と同様に動く**(SCRAM-SHA-256 で認証終端)。idle 管理は engine ポーリングで両対応。baseline import / `init` の自動構築はまだ MySQL のみで、Postgres の baseline は手動で用意する([#230](https://github.com/rikukadev/sashiki/issues/230) で対応中)。
+A. engine として対応。**proxy(固定エンドポイント)と lazy create も MySQL と同様に動く**(SCRAM-SHA-256 で認証終端)。idle 管理は engine ポーリングで両対応(app ロールで `pg_stat_activity` を読む。取得に失敗し続けるブランチは保護され回収されないので、sashikid のログの `connpoll` 警告を見る)。baseline import / `init` の自動構築はまだ MySQL のみで、Postgres の baseline は手動で用意する([#230](https://github.com/rikukadev/sashiki/issues/230) で対応中)。
 
 **Q. FSx バックエンドはいつ使う?**
 

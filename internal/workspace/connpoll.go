@@ -60,10 +60,22 @@ func (m *Manager) pollConnsOnce(ctx context.Context, cc engine.ConnCounter) {
 		n, err := m.checkedConnCount(ctx, cc, engine.Instance{Branch: b.Name, Port: b.Port})
 		if err != nil {
 			// 判定不能: 保護側に倒す(使用中として扱い reaper の対象から外す)。
-			log.Printf("connpoll: %s: %v (使用中として保護)", b.Name, err)
+			// ただし失敗が続くなら、それは「使用中」ではなく監視が壊れている
+			// (psql / mysql が無い、認証が通らない)。毎分の同じログに埋もれて
+			// idle 回収が一度も効いていないことに気づけないので、閾値で
+			// 一度だけ強く言う(#291)。
+			streak := m.noteConnFail(b.Name)
+			if streak == connFailWarnAt {
+				log.Printf("connpoll: %s: 接続数の取得に %d 回連続で失敗しています。"+
+					"このブランチは idle 停止 / 自動削除の対象になりません(監視の認証・クライアントを確認): %v",
+					b.Name, streak, err)
+			} else {
+				log.Printf("connpoll: %s: %v (使用中として保護)", b.Name, err)
+			}
 			counts[b.Name] = 1
 			continue
 		}
+		m.clearConnFail(b.Name)
 		counts[b.Name] = n
 		if n > 0 {
 			if terr := m.db.TouchLastConn(b.Name); terr != nil {
@@ -73,6 +85,27 @@ func (m *Manager) pollConnsOnce(ctx context.Context, cc engine.ConnCounter) {
 	}
 	m.pollMu.Lock()
 	m.pollConns = counts
+	m.pollMu.Unlock()
+}
+
+// connFailWarnAt は連続失敗を強く警告する回数(reaper_interval 既定 1 分なら 3 分)。
+const connFailWarnAt = 3
+
+// noteConnFail は連続失敗回数を増やして返す。
+func (m *Manager) noteConnFail(name string) int {
+	m.pollMu.Lock()
+	defer m.pollMu.Unlock()
+	if m.connFails == nil {
+		m.connFails = map[string]int{}
+	}
+	m.connFails[name]++
+	return m.connFails[name]
+}
+
+// clearConnFail は成功で連続失敗をリセットする。
+func (m *Manager) clearConnFail(name string) {
+	m.pollMu.Lock()
+	delete(m.connFails, name)
 	m.pollMu.Unlock()
 }
 

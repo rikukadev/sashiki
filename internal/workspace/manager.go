@@ -164,6 +164,8 @@ type Manager struct {
 	// activeConns にマージして reaper の使用中判定に使う。
 	pollMu    sync.Mutex
 	pollConns map[string]int
+	// connFails は connpoll の branch ごとの連続失敗回数(#291)。pollMu で守る。
+	connFails map[string]int
 	// connpoll と reaper の回収直前チェックを直列化する。両者が同時にDBへ
 	// 接続すると、監視接続同士をクライアント接続として数えてしまう。
 	connCheckMu sync.Mutex

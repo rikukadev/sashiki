@@ -276,6 +276,39 @@ sashiki-pg reset pg-proc > /dev/null || fail "process モードで reset でき�
 sashiki-pg delete pg-proc > /dev/null || fail "process モードで delete できない"
 echo "  create / reset / delete OK"
 
+# #291: ConnCount が app ロールで pg_stat_activity を読めず「判定不能=使用中」の
+# 保護に倒れ続けると、Postgres のブランチは一度も sleeping にならない。ここで
+# idle 停止が実際に発火することを見る(MySQL 側の e2e と同じ形)。
+log "reaper: idle 停止が Postgres でも発火する (#291)"
+kill $SASHIKID_PID 2>/dev/null || true
+for _ in $(seq 1 20); do curl -sf http://127.0.0.1:8090/v1/healthz >/dev/null 2>&1 || break; sleep 0.3; done
+# 既定 profile(preview)の閾値が効くので、global と preview の両方を短くする。
+sed -i "s/^  max_branches: 5$/  max_branches: 5\n  idle_stop_after: 3s\n  delete_after_idle: 15s\n  reaper_interval: 1s\n  profiles:\n    preview: { idle_stop_after: 3s, delete_after_idle: 15s }/" /etc/sashiki-pg/config.yaml
+grep -q "reaper_interval: 1s" /etc/sashiki-pg/config.yaml || fail "config に reaper 設定を入れられなかった"
+/usr/local/bin/sashikid-pg --config /etc/sashiki-pg/config.yaml > /var/log/sashiki-pg/sashikid-idle.log 2>&1 &
+SASHIKID_PID=$!
+for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null 2>&1 && break; sleep 0.5; done
+curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null || fail "idle 設定で sashikid が起動しない"
+
+sashiki-pg create pg-idle > /dev/null || fail "pg-idle を作れない"
+sleep 6   # idle_stop_after(3s) + reaper 数周期
+if ! grep -q "pg-idle.*sleeping" <<<"$(sashiki-pg list)"; then
+  sashiki-pg list
+  echo "--- sashikid log (connpoll) ---"; grep -i "connpoll" /var/log/sashiki-pg/sashikid-idle.log | tail -5
+  fail "reaper: pg-idle should be sleeping (ConnCount が失敗して保護に倒れていないか)"
+fi
+grep -q "接続数の取得に .* 回連続で失敗" /var/log/sashiki-pg/sashikid-idle.log \
+  && fail "connpoll が失敗し続けている(ConnCount の認証が通っていない)"
+echo "  idle 停止 OK"
+# 再接続(proxy 経由)で起きる
+[ "$(pq 'dev@pg-idle' 'SELECT COUNT(*) FROM items')" = "3" ] || fail "reaper: reconnect should wake sleeping branch"
+grep -q "pg-idle.*running" <<<"$(sashiki-pg list)" || fail "reaper: pg-idle should be running after reconnect"
+echo "  再接続で起床 OK"
+# TTL: 15 秒放置で自動削除
+sleep 18
+grep -q pg-idle <<<"$(sashiki-pg list)" && fail "reaper: pg-idle should be TTL-deleted"
+echo "  TTL 削除 OK"
+
 log "cleanup"
 kill $SASHIKID_PID 2>/dev/null || true
 zpool destroy $POOL
