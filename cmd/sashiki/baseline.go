@@ -187,7 +187,7 @@ type baselineImportOpts struct {
 }
 
 func cmdBaselineImport(args []string) int {
-	opts := baselineImportOpts{configPath: "/etc/sashiki/config.yaml", threads: runtime.NumCPU()}
+	opts := baselineImportOpts{configPath: defaultConfigPath(), threads: runtime.NumCPU()}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--from":
@@ -469,18 +469,15 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	if root == "" {
 		return fmt.Errorf("storage.local.root が未設定です(apfs/reflink には必須)")
 	}
-	baselineTag := cfg.Storage.Local.BaselineSnapshot
-	if baselineTag == "" {
-		baselineTag = "baseline"
+	preferredTag := cfg.Storage.Local.BaselineSnapshot
+	if preferredTag == "" {
+		preferredTag = "baseline"
 	}
 	dataDir := filepath.Join(root, "base", "data")
+	baselineTag, replacing := localBaselineTag(filepath.Join(root, "base", "snap"), preferredTag)
 	snapPath := filepath.Join(root, "base", "snap", baselineTag)
-
-	if _, err := os.Stat(snapPath); err == nil {
-		return fmt.Errorf("baseline %s は既に存在します。取得し直しは baseline refresh で対応", snapPath)
-	}
-	if entries, err := os.ReadDir(dataDir); err == nil && len(entries) > 0 {
-		return fmt.Errorf("%s が空ではありません。初期化済みの base に import はできません", dataDir)
+	if err := prepareLocalBaseData(dataDir, replacing); err != nil {
+		return err
 	}
 
 	// root(コンテナ)なら mysqld を mysql ユーザーに落として動かし、datadir も
@@ -581,6 +578,32 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	registerImportedBaseline(cfg.StateDB, string(snap), baselineTag)
 	fmt.Println("baseline import 完了。sashiki create <name> でブランチを作れます")
 	return nil
+}
+
+// prepareLocalBaseData は base/data を import できる状態にする。replacing
+// (既存 baseline があり新 tag で取り直す)なら中身を空にする。base/data は
+// snapshot の元でしかなく、ブランチは snapshot からの clone なので消しても
+// 失うものは無い。initialize 済みで replacing でない(= init 直後に import を
+// 呼んだ)場合も同じ扱いにする(#293: darwin init は base を作り終えている)。
+func prepareLocalBaseData(dataDir string, replacing bool) error {
+	if replacing {
+		fmt.Println("→ 既存 baseline は残し、新しい tag で取り直す(current を切り替える)")
+	}
+	if entries, err := os.ReadDir(dataDir); err == nil && len(entries) > 0 {
+		if fileExists(filepath.Join(dataDir, "mysqld.pid")) || fileExists(filepath.Join(dataDir, "postmaster.pid")) {
+			return fmt.Errorf("%s で DB が動いています。止めてから import してください", dataDir)
+		}
+		fmt.Printf("→ %s を初期化し直す\n", dataDir)
+		if err := os.RemoveAll(dataDir); err != nil {
+			return fmt.Errorf("clear %s: %w", dataDir, err)
+		}
+	}
+	return nil
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {

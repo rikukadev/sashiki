@@ -169,9 +169,10 @@ init 完了 (darwin)。sashikid は launchd で常駐しています。
   ブランチ:  sashiki create pr-1
   停止:      launchctl unload ~/Library/LaunchAgents/dev.sashiki.sashikid.plist
 
-baseline を差し替えたい場合は %s にデータを入れ直し、
-sashiki baseline refresh を使ってください。
-`, baseData)
+本番相当のデータを入れるなら(root 不要、--config も不要):
+  sashiki baseline import --from dump.sql
+  (init が作った空の baseline は残り、新しい tag で取って current を切り替える)
+`)
 	return exitOK
 }
 
@@ -194,16 +195,14 @@ func resolveMysqld() (string, error) {
 			return p, nil
 		}
 	}
-	// フォールバック: 素の mysql(9.x の可能性)。native_password が無いと
-	// プロキシ認証が通らないため警告する。
+	// 素の mysql(8.4 / 9.x 以降)。app_user は caching_sha2_password で作るので
+	// native_password が無くても動く(#197 / #209)。以前ここで出していた
+	// 「9.x は通らない」警告は古い(#293)。
 	for _, p := range []string{
 		"/opt/homebrew/opt/mysql/bin/mysqld",
 		"/usr/local/opt/mysql/bin/mysqld",
 	} {
 		if binExists(p) {
-			fmt.Fprintln(os.Stderr, "sashiki init: 警告 mysql@8.0 が見つかりません。"+
-				"MySQL 9.x は mysql_native_password を廃止しておりプロキシ認証が通りません。"+
-				"`brew install mysql@8.0` を推奨します。")
 			return p, nil
 		}
 	}

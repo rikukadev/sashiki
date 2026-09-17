@@ -26,7 +26,7 @@ type baselineStreamOpts struct {
 
 // cmdBaselineExport は `sashiki baseline export --to <dest>`。
 func cmdBaselineExport(args []string) int {
-	opts := baselineStreamOpts{configPath: "/etc/sashiki/config.yaml"}
+	opts := baselineStreamOpts{configPath: defaultConfigPath()}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--to":
@@ -105,7 +105,7 @@ func runBaselineExport(cfg config.Config, opts baselineStreamOpts) error {
 
 // cmdBaselineImportStream は `sashiki baseline import-stream --from <src>`。
 func cmdBaselineImportStream(args []string) int {
-	opts := baselineStreamOpts{configPath: "/etc/sashiki/config.yaml"}
+	opts := baselineStreamOpts{configPath: defaultConfigPath()}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--from":

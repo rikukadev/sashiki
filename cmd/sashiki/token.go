@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/rikukadev/sashiki/internal/config"
@@ -20,11 +21,14 @@ func cmdToken(args []string) int {
 		return usageToken()
 	}
 	sub, rest := args[0], args[1:]
-	if os.Geteuid() != 0 {
+	cfgPath := tokenConfigPath(rest)
+	// state.db が /etc・/var 配下(Linux の systemd 構成)なら root が要る。
+	// macOS ネイティブは自分の Application Support 配下なので不要(#293)。
+	if os.Geteuid() != 0 && strings.HasPrefix(cfgPath, "/etc/") {
 		fmt.Fprintln(os.Stderr, "sashiki token: root で実行してください")
 		return exitError
 	}
-	cfg, err := config.Load(tokenConfigPath(rest))
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki token: config:", err)
 		return exitError
@@ -67,7 +71,7 @@ func tokenConfigPath(args []string) string {
 			return args[i+1]
 		}
 	}
-	return "/etc/sashiki/config.yaml"
+	return defaultConfigPath()
 }
 
 func cmdTokenCreate(db *state.DB, args []string) int {
