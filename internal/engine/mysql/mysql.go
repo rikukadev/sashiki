@@ -45,6 +45,11 @@ type Config struct {
 	// engine.mysql.buffer_pool_size がメモリ見積もりにしか使われず、実際の
 	// mysqld は unit の 256M 固定 / process では 128M だった(#299)。
 	BufferPoolBytes int64
+	// StopTimeout は process モードの graceful stop を待つ時間(既定 10 分)。
+	// systemd は #245 で TimeoutStopSec=600 にしたが、process モードは
+	// ReadyTimeout(30s)を流用していて、buffer pool の大きい mysqld の停止が
+	// 間に合わず recreate / promote が error になっていた(#302)。
+	StopTimeout time.Duration
 }
 
 const (
@@ -56,6 +61,8 @@ const (
 type Engine struct {
 	cfg Config
 	run func(ctx context.Context, name string, args ...string) (string, error)
+	// procNames は process モードで pidfile の pid が本当に mysqld かを確かめる名前(#302)。
+	procNames []string
 }
 
 // New は MySQL エンジンを作る。
@@ -78,7 +85,10 @@ func New(cfg Config) *Engine {
 	if cfg.RunUser == "" {
 		cfg.RunUser = "mysql"
 	}
-	e := &Engine{cfg: cfg}
+	if cfg.StopTimeout == 0 {
+		cfg.StopTimeout = 10 * time.Minute
+	}
+	e := &Engine{cfg: cfg, procNames: []string{"mysqld", filepath.Base(cfg.MysqldBin)}}
 	e.run = e.execCmd
 	return e
 }

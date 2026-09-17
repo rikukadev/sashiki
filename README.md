@@ -142,6 +142,12 @@ Linux 手順と同じコマンドがそのまま通る。`init` が作った空�
 `baseline import --from dump.sql` は新しい tag で取って current を切り替える。
 `sashiki token` も darwin では root 不要。詳細と Lima/worktree 連動は [docs/LOCAL-DEV.md](docs/LOCAL-DEV.md)。
 
+macOS ネイティブの運用メモ:
+- **root は APFS 上に置く**(clonefile は APFS でしか効かない。`init` が確認して、外付けの exFAT などなら止まる)。`init` は root を **Time Machine の対象から外す**(バックアップ先では CoW が保てずフルサイズで複製されるため)
+- sashikid は **LaunchAgent**(ログイン中だけ動く。`KeepAlive` なので kill しても復活する)。止めるのは `launchctl unload ~/Library/LaunchAgents/dev.sashiki.sashikid.plist`(Postgres 版は `…sashikid-pg.plist`)。ログは `<root>/log/sashikid.{out,err}.log`
+- branch の mysqld / postgres は sashikid を止めても動き続ける(意図的)。sashikid は起動時に pidfile とプロセス名で再認識する
+- graceful stop は最大 10 分待つ(buffer pool が大きいと停止に時間がかかる)
+
 > 実測(20GB baseline, Apple Silicon): create 1〜3s / reset 1.3〜2.5s / recreate 〜3.5s。
 
 ### コンテナ(VM 無し)

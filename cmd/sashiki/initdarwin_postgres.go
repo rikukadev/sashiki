@@ -59,6 +59,11 @@ func cmdInitDarwinPostgres(opts initOpts) int {
 			return exitError
 		}
 	}
+	// APFS 上か確認し、Time Machine の対象から外す(#302)。
+	if err := prepareDarwinRoot(root); err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki init:", err)
+		return exitError
+	}
 
 	pgBinOf := func(name string) string { return filepath.Join(binDir, name) }
 	// 一時クラスタへは unix socket で繋ぐ(TCP は開かない)。

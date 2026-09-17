@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -72,7 +73,8 @@ func spawnFake(t *testing.T, e *Engine, ins engine.Instance) *exec.Cmd {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = cmd.Wait() }() // 反リープ: 死んだら回収してゾンビ化を防ぐ
+	e.procNames = append(e.procNames, "sleep") // 偽 mysqld を mysqld とみなす
+	go func() { _ = cmd.Wait() }()             // 反リープ: 死んだら回収してゾンビ化を防ぐ
 	pidfile := e.pidPath(ins)
 	if err := os.WriteFile(pidfile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
 		t.Fatal(err)
@@ -138,5 +140,38 @@ func TestStartArgsBufferPool(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(New(Config{Mode: ModeProcess}).startArgs(engine.Instance{DataDir: "/d"}), " "), "innodb-buffer-pool-size") {
 		t.Error("unset BufferPoolBytes must not pass the option")
+	}
+}
+
+// pidfile の pid が mysqld 以外に再利用されていたら running とみなさず、
+// Stop もそのプロセスにシグナルを送らない(#302)。
+func TestStalePidfileWithReusedPid(t *testing.T) {
+	e := New(Config{Mode: ModeProcess, ReadyTimeout: 3 * time.Second})
+	ins := engine.Instance{Branch: "pr-9", DataDir: filepath.Join(t.TempDir(), "pr-9"), Port: 3409}
+	if err := os.MkdirAll(ins.DataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := exec.Command("sleep", "60") // 「pid を再利用した別プロセス」
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = other.Process.Kill(); _ = other.Wait() }()
+	if err := os.WriteFile(e.pidPath(ins), []byte(strconv.Itoa(other.Process.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if e.isRunningProcess(ins) {
+		t.Fatal("a non-mysqld process behind a stale pidfile must not count as running")
+	}
+	if err := e.Stop(context.Background(), ins); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Error("Stop must not signal the unrelated process")
+	}
+}
+
+func TestStopTimeoutDefault(t *testing.T) {
+	if got := New(Config{Mode: ModeProcess}).cfg.StopTimeout; got != 10*time.Minute {
+		t.Errorf("default StopTimeout = %s, want 10m", got)
 	}
 }

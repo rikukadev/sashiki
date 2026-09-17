@@ -83,17 +83,21 @@ func (e *Engine) stopProcess(ctx context.Context, ins engine.Instance) error {
 	if !ok {
 		return nil // 既に居ない
 	}
+	if !e.isRunningProcess(ins) {
+		_ = os.Remove(e.pidPath(ins)) // stale pidfile(再利用された pid を殺さない)
+		return nil
+	}
 	_ = syscall.Kill(pid, syscall.SIGTERM)
-	if e.waitGone(ins, e.cfg.ReadyTimeout) {
+	if e.waitGone(ins, e.cfg.StopTimeout) {
 		_ = os.Remove(e.pidPath(ins))
 		return nil
 	}
-	return fmt.Errorf("stop mysqld@%s (pid %d): did not shut down in %s", ins.Branch, pid, e.cfg.ReadyTimeout)
+	return fmt.Errorf("stop mysqld@%s (pid %d): did not shut down in %s", ins.Branch, pid, e.cfg.StopTimeout)
 }
 
 // killProcess は SIGKILL で即時停止する(rollback で捨てる dirty state 用)。
 func (e *Engine) killProcess(ctx context.Context, ins engine.Instance) error {
-	if pid, ok := e.readPid(ins); ok {
+	if pid, ok := e.readPid(ins); ok && e.isRunningProcess(ins) {
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 		e.waitGone(ins, 5*time.Second)
 	}
@@ -108,13 +112,21 @@ func (e *Engine) killProcess(ctx context.Context, ins engine.Instance) error {
 	return nil
 }
 
-// isRunningProcess は pidfile の pid が生きているかで判定する。
+// isRunningProcess は pidfile の pid が生きていて、かつ mysqld であるかで判定する。
+// pid だけ見ると、再起動後に残った pidfile の pid を別プロセスが再利用していたとき
+// running と誤認し、Stop / Kill がそのプロセスにシグナルを送る(#302)。
 func (e *Engine) isRunningProcess(ins engine.Instance) bool {
 	pid, ok := e.readPid(ins)
 	if !ok {
 		return false
 	}
-	return syscall.Kill(pid, 0) == nil
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	if match, known := engine.ProcessIs(pid, e.procNames...); known && !match {
+		return false
+	}
+	return true
 }
 
 // readPid は pidfile から pid を読む。

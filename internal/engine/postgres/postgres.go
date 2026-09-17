@@ -53,6 +53,8 @@ type Config struct {
 	// 127.0.0.1 に繋げず、idle 停止が一度も発火しなかった(#291)。
 	AppUser string
 	AppPass string
+	// StopTimeout は process モードの graceful stop を待つ時間(既定 10 分、#302)。
+	StopTimeout time.Duration
 }
 
 const (
@@ -82,6 +84,9 @@ func New(cfg Config) *Engine {
 	}
 	if cfg.AppUser == "" {
 		cfg.AppUser = "dev"
+	}
+	if cfg.StopTimeout == 0 {
+		cfg.StopTimeout = 10 * time.Minute
 	}
 	e := &Engine{cfg: cfg}
 	e.run = e.execCmd
