@@ -108,8 +108,11 @@ promote / set するまで **reset / recreate / delete は 412 で拒否**され
 ```bash
 sudo systemctl enable --now sashikid
 sashiki create pr-1
-mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306   # :3306 固定エンドポイント経由で接続
+mysql -udev@pr-1 -p -h 127.0.0.1 -P3306   # :3306 固定エンドポイント経由で接続
 ```
+
+パスワードは `init` がランダム生成して表示したもの(`/etc/sashiki/config.yaml` の `app_pass`)。
+固定したいときは `sudo sashiki init --app-pass <値>`。macOS ネイティブとコンテナは開発用途なので既定 `dev` のまま。
 
 ### macOS ネイティブ(VM 無し)
 
@@ -195,6 +198,15 @@ GitHub Action なら `secrets.SASHIKI_API_TOKEN` を渡すだけ(下の使い方
 - サーバー側は、起動時に `SASHIKI_API_TOKEN` で渡した 1 個(後方互換)か、`sashiki token` で発行した state.db のトークン(ハッシュ照合)を検証する。
 - ローテーションは **新規発行 → 配布先を差し替え → 旧トークンを `sashiki token revoke`**。
 - ⚠️ 認証免除は「接続元が loopback か」で判定する。**リバースプロキシ越しに公開すると接続元が 127.0.0.1 に見えて素通しになる**ため、外部公開時は sashikid を直接 listen させるか、**`auth.trust_loopback: false`** を設定して loopback でも Bearer トークンを必須にすること。
+
+### proxy(:3306)側の既定値
+
+API とは別に、DB クライアントが繋ぐ proxy は **app パスワード 1 つ**で認証を終端する。既定の組み合わせを知っておくこと:
+
+- `listen.proxy: 0.0.0.0:3306` — 全 IF で待つ。SG / ファイアウォールで到達元を絞る
+- `branches.lazy_create: true` — **未知のブランチ名で接続すると、認証後にそのブランチを作る**(`max_branches` まで)。Action で明示的に create する運用なら `false` にできる
+- `app_pass` — Linux の `init` はランダム生成、macOS / コンテナは `dev`。パスワードを知る人は誰でも lazy create できるので、`dev` のまま外に出さない
+- 認証失敗が続く接続元には応答を遅らせる(5 回まで即時、以降 1s → 8s)。正しいパスワードで通れば解除
 
 ## 3 つの使い方
 

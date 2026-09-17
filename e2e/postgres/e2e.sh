@@ -41,7 +41,7 @@ log "sashiki init --engine postgres (#224)"
 # データセット作成・unit 配置・config 生成を init に任せて実機で検証する
 # (パッケージはこのスクリプトが先に入れているので --skip-packages)。
 rm -f /etc/sashiki/config.yaml
-sashiki-pg init --engine postgres --pool $POOL --skip-packages --yes \
+sashiki-pg init --engine postgres --pool $POOL --app-pass dev --skip-packages --yes \
   || fail "sashiki init --engine postgres が失敗した"
 # postgres は 8KB ページ。base だけでなく branches 側にも要る(クローンは
 # origin ではなく名前空間上の親からプロパティを継承するため)。

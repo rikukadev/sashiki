@@ -18,6 +18,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"github.com/rikukadev/sashiki/internal/authlimit"
 	"io"
 	"log"
 	"net"
@@ -60,7 +61,9 @@ type Server struct {
 	cfg    Config
 	router Router
 	nameRe *regexp.Regexp
-	connID atomic.Uint32
+	// limiter は接続元ごとの認証失敗 backoff(#297)。
+	limiter *authlimit.Limiter
+	connID  atomic.Uint32
 
 	mu    sync.Mutex
 	conns map[string]int
@@ -81,7 +84,7 @@ func New(cfg Config, router Router) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{cfg: cfg, router: router, nameRe: re, conns: map[string]int{}}, nil
+	return &Server{cfg: cfg, router: router, nameRe: re, conns: map[string]int{}, limiter: authlimit.New()}, nil
 }
 
 // Listen は接続を受け付ける。ctx キャンセルで停止。
@@ -204,10 +207,14 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	} else {
 		verified = verifyNativePassword(s.cfg.AppPassword, salt, hr.authResp)
 	}
+	src := authlimit.Key(client.RemoteAddr())
 	if !verified {
+		// 失敗が続く接続元には応答を遅らせる(総当たり対策、#297)。
+		authlimit.Sleep(ctx, s.limiter.Fail(src))
 		return authErr(client, seq+1, 1045, "28000",
 			fmt.Sprintf("Access denied for user '%s'@'%s' (using password: YES)", user, branch))
 	}
+	s.limiter.Reset(src)
 
 	// 4. 認証済み → branch 解決(必要なら lazy create)
 	port, err := s.router.RouteBranch(ctx, branch)

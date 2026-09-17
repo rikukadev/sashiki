@@ -30,7 +30,9 @@ engine:
   mysql:
     port_range: [3401, 3600]
     app_user: dev            # 方式A の app credential(旧名 proxy_user も可)
-    app_pass: dev            # 旧名 proxy_pass も可
+    # init がランダム生成する(--app-pass で固定可)。proxy と baseline import の
+    # 両方がこれを使う。変更したら baseline のユーザーも合わせて変えること。
+    app_pass: {{.AppPass}}
     # per-branch の <branch>.env は sashikid(User=sashiki)が書き、mysqld@.service が
     # 読む。/run/sashiki は sashikid.service の RuntimeDirectory=sashiki で sashiki 所有
     # として作られる(/etc は root 所有で書けないため #177)。

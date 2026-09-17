@@ -58,7 +58,8 @@ log "sashiki install + init"
 install -m 755 "$SASHIKID_BIN" /usr/local/bin/sashikid
 install -m 755 "$SASHIKI_BIN" /usr/local/bin/sashiki
 truncate -s 3G "$POOL_IMG"
-sashiki init --pool $POOL --device "$POOL_IMG" --skip-packages --yes
+# --app-pass dev: 既定はランダム生成(#297)。以降の mysql -pdev を固定する。
+sashiki init --pool $POOL --device "$POOL_IMG" --app-pass dev --skip-packages --yes
 zfs list $POOL/base $POOL/branches > /dev/null || fail "init should create datasets"
 # 再実行安全であること(主要ステップがスキップされ成功する)
 init2=$(sashiki init --pool $POOL --skip-packages --yes) || fail "init re-run should succeed"

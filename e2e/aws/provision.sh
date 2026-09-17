@@ -56,7 +56,8 @@ echo "  device: $DEVICE ($(lsblk -dno SIZE "$DEVICE" | tr -d ' '))"
 log "sashiki init --device $DEVICE"
 # --yes は必須。cloud-init には TTY も標準入力も無いので、確認プロンプトは
 # 即 EOF で「中止しました」になる。自動化から使う経路はここを通る。
-sashiki init --yes --pool "$POOL" --device "$DEVICE" || fail "init が失敗した"
+# --app-pass dev: 既定はランダム生成(#297)。run.sh の mysql -pdev を固定する。
+sashiki init --yes --pool "$POOL" --device "$DEVICE" --app-pass dev || fail "init が失敗した"
 zpool list "$POOL" > /dev/null || fail "zpool $POOL が作られていない"
 
 log "baseline import"
