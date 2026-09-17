@@ -309,7 +309,7 @@ Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したと�
 
 ## 機能
 
-- **branch lifecycle**: create / reset / recreate / delete / retry(hook 失敗などからの再実行)
+- **branch lifecycle**: create / reset / recreate / delete / retry(create / reset / recreate / wake が途中で失敗したブランチを `error` から再実行。残骸は掃除して origin から作り直す)
 - **profile / lease**: 用途ごとの idle lifecycle(preview / ci / sandbox)+ `--ttl` / `lease renew` の絶対期限
 - **proxy(:3306 固定エンドポイント)**: `mysql -udev@<branch>` でルーティング。**認証終端(方式A)**——sashiki がパスワードを検証し、**認証後に** lazy create(認証前のリソース確保を防ぐ)。TLS 終端対応(`proxy.tls_cert`)
 - **アイドル管理**: 無接続で mysqld 停止(`sleeping`)、再接続で起床。engine ポーリングで接続を追跡するので proxy を通らない接続でも正しく判定。TTL / lease で自動削除
