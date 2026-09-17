@@ -20,6 +20,8 @@
 
 **理由**: v0.1 は zfs 専用であり、付け替え(ポート・接続先の切り替え)は実バックエンドなしにテスト不能。インターフェース(Capabilities.FastRollback)だけ v0.1 で切っておく。
 
+**更新**: fsx-zfs の実装で「同じ origin から新クローン + 付け替え」の reset を実装済み(`Manager.recreateFrom`)。zfs の rollback と違い on-create hook を再実行する。
+
 ## ADR-003: SQLite ドライバは modernc.org/sqlite
 
 **決定**: cgo 不要の pure Go 実装を使う。

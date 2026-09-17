@@ -53,6 +53,8 @@ type Config struct {
 	// 127.0.0.1 に繋げず、idle 停止が一度も発火しなかった(#291)。
 	AppUser string
 	AppPass string
+	// StopTimeout は process モードの graceful stop を待つ時間(既定 10 分、#302)。
+	StopTimeout time.Duration
 }
 
 const (
@@ -82,6 +84,9 @@ func New(cfg Config) *Engine {
 	}
 	if cfg.AppUser == "" {
 		cfg.AppUser = "dev"
+	}
+	if cfg.StopTimeout == 0 {
+		cfg.StopTimeout = 10 * time.Minute
 	}
 	e := &Engine{cfg: cfg}
 	e.run = e.execCmd
@@ -115,8 +120,10 @@ func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
 	if err := os.MkdirAll(e.cfg.EnvDir, 0o755); err != nil {
 		return fmt.Errorf("ensure env_dir %s: %w", e.cfg.EnvDir, err)
 	}
-	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\nPGBIN=%s\nLISTEN_ADDRESSES=%s\n",
-		ins.Port, ins.DataDir, e.cfg.BinDir, e.cfg.ListenAddresses)
+	// SHARED_BUFFERS も渡す。以前は process モードだけが shared_buffers を効かせ、
+	// systemd unit は postgres 既定のままだった(#299)。
+	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\nPGBIN=%s\nLISTEN_ADDRESSES=%s\nSHARED_BUFFERS=%s\n",
+		ins.Port, ins.DataDir, e.cfg.BinDir, e.cfg.ListenAddresses, pgSize(e.cfg.SharedBuffers))
 	if err := os.WriteFile(filepath.Join(e.cfg.EnvDir, ins.Branch+".env"), []byte(env), 0o644); err != nil {
 		return fmt.Errorf("write env: %w", err)
 	}

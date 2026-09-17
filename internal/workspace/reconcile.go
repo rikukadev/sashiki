@@ -23,7 +23,20 @@ type ReconcileReport struct {
 }
 
 // Reconcile は state.db を ZFS / engine と突き合わせて整合させる(起動時に呼ぶ)。
+// 中断された遷移の回収・error 付与・sleeping への降格まで書き込む。
 func (m *Manager) Reconcile(ctx context.Context) (ReconcileReport, error) {
+	return m.reconcile(ctx, true)
+}
+
+// inspect は Reconcile と同じ突き合わせを書き込み無しで行う(doctor / gc 用、#303)。
+// 以前は doctor / gc --orphans も Reconcile を呼んでいて、実行中の create / reset を
+// 「再起動で中断された」とみなして error にし、deleting の Delete を再開していた。
+// 起動時と違い、稼働中は creating / resetting / deleting が正当に存在する。
+func (m *Manager) inspect(ctx context.Context) (ReconcileReport, error) {
+	return m.reconcile(ctx, false)
+}
+
+func (m *Manager) reconcile(ctx context.Context, mutate bool) (ReconcileReport, error) {
 	var rep ReconcileReport
 	branches, err := m.db.ListBranches()
 	if err != nil {
@@ -36,6 +49,12 @@ func (m *Manager) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		// 遷移中状態(creating/resetting/deleting)で残っている = 再起動で中断された
 		// 残骸。sashikid は単一プロセスなので起動時に正当な mid-operation は無い(#53
 		// は operation テーブルの回収。ここは branch state を回収する)。
+		if !mutate {
+			switch b.State {
+			case state.StateDeleting, state.StateCreating, state.StateResetting:
+				continue // 稼働中の正当な遷移。触らない
+			}
+		}
 		switch b.State {
 		case state.StateDeleting:
 			// 削除の途中で落ちた → 削除を完了させる(volume 欠損でも Delete が行を掃除する)。
@@ -63,15 +82,19 @@ func (m *Manager) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		vol, verr := m.resolveVolume(ctx, b)
 		if verr != nil {
 			// dataset が無い → recoverable=false の error(手動で消された等)
-			_ = m.db.SetError(b.Name, "reconcile", "dataset_missing", false,
-				"dataset not found for branch", []string{"`sashiki delete " + b.Name + "` で行を掃除"})
+			if mutate {
+				_ = m.db.SetError(b.Name, "reconcile", "dataset_missing", false,
+					"dataset not found for branch", []string{"`sashiki delete " + b.Name + "` で行を掃除"})
+			}
 			rep.Errored = append(rep.Errored, b.Name)
 			continue
 		}
 		// running なのにプロセスが死んでいる → sleeping(volume は健全)
 		if b.State == state.StateRunning {
 			if running, _ := m.eng.IsRunning(ctx, m.instance(b, vol)); !running {
-				_ = m.db.SetState(b.Name, state.StateSleeping, "")
+				if mutate {
+					_ = m.db.SetState(b.Name, state.StateSleeping, "")
+				}
 				rep.Demoted = append(rep.Demoted, b.Name)
 			}
 		}
@@ -91,7 +114,7 @@ func (m *Manager) Reconcile(ctx context.Context) (ReconcileReport, error) {
 			}
 		}
 	}
-	if len(rep.Demoted)+len(rep.Errored)+len(rep.Orphans)+len(rep.Interrupted) > 0 {
+	if mutate && len(rep.Demoted)+len(rep.Errored)+len(rep.Orphans)+len(rep.Interrupted) > 0 {
 		log.Printf("reconcile: demoted=%v errored=%v orphans=%v interrupted=%v",
 			rep.Demoted, rep.Errored, rep.Orphans, rep.Interrupted)
 	}
@@ -100,7 +123,7 @@ func (m *Manager) Reconcile(ctx context.Context) (ReconcileReport, error) {
 
 // GCOrphans は state.db に無い dataset(orphan)を削除する(sashiki gc --orphans)。
 func (m *Manager) GCOrphans(ctx context.Context) ([]string, error) {
-	rep, err := m.Reconcile(ctx)
+	rep, err := m.inspect(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +290,7 @@ func (m *Manager) Doctor(ctx context.Context) (DoctorReport, error) {
 	}
 
 	// orphan
-	if rep, err := m.Reconcile(ctx); err == nil {
+	if rep, err := m.inspect(ctx); err == nil {
 		d.Orphans = rep.Orphans
 		if len(d.Orphans) == 0 {
 			add("orphan datasets", checkOK, "")

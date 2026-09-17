@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ベースライン更新テンプレート(仕様 10-5)。自社向けに書き換えて
+# ベースライン更新テンプレート(仕様 12 章 / baseline.refresh_script)。自社向けに書き換えて
 # /etc/sashiki/refresh.sh に置く。sashikid の POST /v1/baseline/refresh から呼ばれる。
 #
 # 責務: base の mysqld を起動 → 最新データ投入(PII はここでマスク) →

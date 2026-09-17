@@ -625,3 +625,53 @@ func TestProxyPortParsing(t *testing.T) {
 		}
 	}
 }
+
+// healthz と Web UI の HTML は認証の外(#301)。データを返す API は 401 のまま。
+func TestHealthzAndWebUIBypassAuth(t *testing.T) {
+	db, _ := state.Open(filepath.Join(t.TempDir(), "s.db"))
+	defer func() { _ = db.Close() }()
+	fs := fakeStorage{}
+	mgr, _ := workspace.New(workspace.Config{NamePattern: `^.+$`, PortLow: 1, PortHigh: 2, EngineType: "mysql"}, fs, fs, fakeEngine{}, nil, db)
+	s := New(mgr, "d", "mysql", "dev", "dev", "secret", db)
+	s.SetTrustLoopback(false)
+	do := func(method, path string) int {
+		req := httptest.NewRequest(method, path, nil)
+		req.RemoteAddr = "10.0.0.5:1"
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if c := do(http.MethodGet, "/v1/healthz"); c != http.StatusOK {
+		t.Errorf("healthz without token = %d, want 200", c)
+	}
+	if c := do(http.MethodGet, "/"); c != http.StatusOK {
+		t.Errorf("web UI HTML without token = %d, want 200", c)
+	}
+	if c := do(http.MethodGet, "/v1/branches"); c != http.StatusUnauthorized {
+		t.Errorf("API without token = %d, want 401", c)
+	}
+}
+
+// 同じブランチに実行中の operation があれば 202 ではなく 409(#303)。
+func TestBranchOperationInProgressIs409(t *testing.T) {
+	db, _ := state.Open(filepath.Join(t.TempDir(), "s.db"))
+	defer func() { _ = db.Close() }()
+	fs := fakeStorage{}
+	mgr, _ := workspace.New(workspace.Config{NamePattern: `^.+$`, PortLow: 1, PortHigh: 2, EngineType: "mysql"}, fs, fs, fakeEngine{}, nil, db)
+	s := New(mgr, "d", "mysql", "dev", "dev", "", db)
+	r := ops.New(db)
+	s.SetOps(r)
+	release := make(chan struct{})
+	if _, err := r.StartExclusive("reset", "pr-1", func(context.Context) error { <-release; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	defer close(release)
+	rec := httptest.NewRecorder()
+	s.accepted(rec, "delete", "pr-1", func(context.Context) error { return nil })
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "operation_in_progress") {
+		t.Errorf("status = %d body = %s, want 409 operation_in_progress", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Sashiki-Operation-Id") == "" {
+		t.Error("409 should point at the running operation id")
+	}
+}

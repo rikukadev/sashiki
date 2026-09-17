@@ -8,6 +8,7 @@ User=mysql
 Group=mysql
 # <branch>.env は sashikid(User=sashiki)が /run/sashiki に書く(RuntimeDirectory、#177)。
 EnvironmentFile=/run/sashiki/%i.env
+# innodb_buffer_pool_size は sashikid が $MYSQLD_DEFAULTS で渡す(engine.mysql.buffer_pool_size、#299)。
 ExecStart=/usr/sbin/mysqld $MYSQLD_DEFAULTS \
   --datadir=${DATADIR} \
   --bind-address=127.0.0.1 \
@@ -15,7 +16,6 @@ ExecStart=/usr/sbin/mysqld $MYSQLD_DEFAULTS \
   --socket=/tmp/mysql-%i.sock \
   --pid-file=/tmp/mysql-%i.pid \
   --log-error=/var/log/sashiki/%i.err \
-  --innodb-buffer-pool-size=256M \
   --skip-mysqlx
 Restart=no
 # 停止に時間がかかっても SIGKILL しない(#245)。systemd 既定の 90 秒で

@@ -68,6 +68,11 @@ func cmdInitDarwin(opts initOpts) int {
 			return exitError
 		}
 	}
+	// APFS 上か確認し、Time Machine の対象から外す(#302)。
+	if err := prepareDarwinRoot(root); err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki init:", err)
+		return exitError
+	}
 
 	steps := []initStep{
 		{

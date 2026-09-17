@@ -38,8 +38,21 @@
   .null { opacity: .4; font-style: italic; }
   .stale { color: #bf8700; }
   .baseline-cell { opacity: .75; }
+  #auth { display: none; margin: 1rem 0; padding: .8rem; border-radius: 6px;
+          border: 1px solid color-mix(in srgb, currentColor 25%, transparent); }
+  #auth input { font: inherit; padding: .3rem .5rem; width: 28rem; max-width: 100%; box-sizing: border-box; }
+  #auth button, #logout { font: inherit; padding: .3rem .8rem; cursor: pointer; }
+  #logout { display: none; float: right; font-size: .8rem; }
 </style>
+<button id="logout" type="button">トークンを消す</button>
 <h1>🌿 sashiki <span id="baseline"></span></h1>
+<form id="auth">
+  <p>この sashikid はトークンが必要です(<code>sashiki token create --name ui --scope admin</code> で発行)。
+     トークンはこのブラウザのタブにだけ保存します。</p>
+  <input id="token" type="password" autocomplete="off" placeholder="sashiki_...">
+  <button type="submit">使う</button>
+  <div id="autherr" style="color:#cf222e"></div>
+</form>
 <table id="branches">
   <thead><tr><th>NAME</th><th>STATE</th><th>PORT</th><th>BASELINE</th><th>LAST_CONN</th><th>USED</th></tr></thead>
   <tbody id="rows"><tr><td colspan="6">loading…</td></tr></tbody>
@@ -93,11 +106,38 @@ function shortSnap(s) {
   return sl >= 0 ? s.slice(sl + 1) : s;
 }
 
+// トークン(#301)。loopback 無認証なら不要。401 が返ったら入力欄を出す。
+// sessionStorage に置く(タブを閉じたら消える)。Authorization ヘッダは
+// ブラウザが自動では付けないので CSRF にならない。
+const TOKEN_KEY = "sashiki.token";
+function token() { try { return sessionStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; } }
+function setToken(v) { try { v ? sessionStorage.setItem(TOKEN_KEY, v) : sessionStorage.removeItem(TOKEN_KEY); } catch {} }
+async function api(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers || {});
+  if (token()) headers["Authorization"] = "Bearer " + token();
+  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  if (res.status === 401) {
+    document.getElementById("auth").style.display = "block";
+    document.getElementById("autherr").textContent = token() ? "トークンが無効です" : "";
+    throw new Error("unauthorized");
+  }
+  document.getElementById("auth").style.display = "none";
+  document.getElementById("logout").style.display = token() ? "block" : "none";
+  return res;
+}
+document.getElementById("auth").addEventListener("submit", e => {
+  e.preventDefault();
+  setToken(document.getElementById("token").value.trim());
+  document.getElementById("token").value = "";
+  refresh();
+});
+document.getElementById("logout").addEventListener("click", () => { setToken(""); location.reload(); });
+
 async function refresh() {
   try {
     const [br, bl] = await Promise.all([
-      fetch("/v1/branches").then(r => r.json()),
-      fetch("/v1/baseline").then(r => r.json()),
+      api("/v1/branches").then(r => r.json()),
+      api("/v1/baseline").then(r => r.json()),
     ]);
     document.getElementById("baseline").textContent =
       shortSnap(bl.current) + (bl.refreshing ? " (refreshing…)" : "");
@@ -127,7 +167,7 @@ async function openBranch(name) {
   el.textContent = "loading schema…";
   refresh();
   try {
-    const res = await fetch(`/v1/branches/${encodeURIComponent(name)}/schema`);
+    const res = await api(`/v1/branches/${encodeURIComponent(name)}/schema`);
     if (!res.ok) throw new Error((await res.json()).error?.message || res.status);
     const { databases } = await res.json();
     if (!databases.length) { el.textContent = "(ユーザーDBなし)"; return; }
@@ -165,7 +205,7 @@ async function runQuery() {
   err.textContent = ""; table.innerHTML = "<tr><td>running…</td></tr>";
   table.classList.toggle("raw", /^\s*show\s+create/i.test(sql));
   try {
-    const res = await fetch(`/v1/branches/${encodeURIComponent(selected)}/query`, {
+    const res = await api(`/v1/branches/${encodeURIComponent(selected)}/query`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sql }),
     });

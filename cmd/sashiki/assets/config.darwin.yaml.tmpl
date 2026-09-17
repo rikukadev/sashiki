@@ -24,8 +24,9 @@ engine:
     port_range: [3401, 3600]
     app_user: dev
     app_pass: dev
-    # macOS の APFS は case-insensitive のため、mysqld は base 初期化・起動の
-    # 両方で lower_case_table_names=2 を自動設定する(init と runtime で一致)。
+    # macOS の APFS は既定で case-insensitive で、mysqld 自身がそれを検出して
+    # lower_case_table_names=2 で動く(sashiki は設定しない。init と runtime は同じ
+    # ボリュームなので一致する)。
     # case-sensitive ボリューム上に root を置く場合や明示したい場合は extra_cnf に
     # [mysqld] lower_case_table_names=2 を書いて指定する(#132)。
     # extra_cnf: /path/to/server.80.cnf   # プロジェクト固有 my.cnf を使うなら

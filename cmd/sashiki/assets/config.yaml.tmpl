@@ -1,4 +1,5 @@
-# sashikid の設定。sashiki init が生成した初期値。詳細は README の設定リファレンス。
+# sashikid の設定。sashiki init が生成した初期値。キーの一覧は docs/SPEC.md 21 章。
+# 未知のキーは起動時にエラーになる(綴りを間違えても黙って無視しない)。
 listen:
   api: "127.0.0.1:8080"     # Web UI もここ (GET /)
   proxy: "0.0.0.0:3306"
@@ -58,6 +59,7 @@ branches:
   idle_stop_after: 30m      # 接続なしで mysqld を停止(データは残る、再接続で起床)
   delete_after_idle: 168h   # 7日間接続なしで削除。PR close 取りこぼしの保険
   operation_retention: 168h # 完了した operation を7日で掃除(0=無期限)
+  error_retention: 72h      # error 状態になって3日で削除(調査の猶予。0=残す)。lease(--ttl)は error でも効く
   # profile: 用途ごとに idle lifecycle を変える。branch は create --profile P で
   # 1つ持ち、reaper はその profile の閾値を使う(未設定フィールドは上の global に戻る)。
   # lease(絶対期限)は profile ではなく `sashiki create --ttl 7d` /
