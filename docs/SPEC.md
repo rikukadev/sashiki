@@ -675,76 +675,119 @@ daemon 再起動後、state.db / ZFS dataset / mysqld プロセス / systemd uni
 
 ## 21. 設定ファイル
 
+実装(`internal/config`)と同じ形。**未知のキーは起動時にエラー**になるので、ここに無いキーは書かない
+(下のサンプルはそのまま `config.Load` で読めることをテストで確かめている)。サイズは `256M` / `256MB` /
+`20GiB` のいずれも可(2 進)。watermark は 0〜1 の比率。
+
 ```yaml
 listen:
-  api: "127.0.0.1:8080"
-  metrics: "127.0.0.1:9100"
+  api: "127.0.0.1:8080"           # Web UI もここ
+  proxy: "0.0.0.0:3306"           # "" で proxy 無効
+  metrics: "127.0.0.1:9100"       # 認証なし。loopback 以外で開くなら到達元を絞る
 
+domain: sashiki.internal          # API の host に返る名前
 state_db: /var/lib/sashiki/state.db
 run_dir: /run/sashiki
 log_dir: /var/log/sashiki
+log_format: text                  # text | json
 
 storage:
-  backend: ebs-zfs                # ebs-zfs | fsx-zfs
-  high_watermark: 80%
-  critical_watermark: 90%
+  backend: ebs-zfs                # ebs-zfs | fsx-zfs | apfs | reflink(旧名 zfs / fsx も可)
+  high_watermark: 0.8             # 0〜1。0 で無効
+  critical_watermark: 0.9         # 超えたら create / wake / recreate を拒否
+  default_storage_quota: 20GiB    # branch ごとの refquota。空 = 無制限(ebs-zfs のみ)
   ebs-zfs:
     pool: dbpool
     base_dataset: dbpool/base
     branch_parent: dbpool/branches
+    baseline_snapshot: baseline
+    sudo: true
   fsx-zfs:
     region: ap-northeast-1
     filesystem_id: fs-xxxx
     base_volume_id: fsvol-xxxx
+    dns_name: fs-xxxx.fsx.ap-northeast-1.amazonaws.com   # 必須
+    parent_volume_id: ""          # 空なら自動発見
     mount_root: /mnt/sashiki
+  local:                          # apfs / reflink
+    root: ""
+    baseline_snapshot: baseline
 
 engine:
   type: mysql                     # mysql | postgres
   mysql:
-    binary: /usr/sbin/mysqld
     port_range: [3401, 3600]
-    buffer_pool_size: 256M
+    buffer_pool_size: 256M        # branch の mysqld に渡り、メモリ見積もりにも使う
     expected_rss: 600M
     memory_headroom: 1G
-    app_user: dev                 # baseline に作っておく
+    max_running: 10               # 同時稼働 mysqld 数(0 = 無制限)
+    app_user: dev                 # baseline に作る接続ユーザー(旧名 proxy_user)
+    app_pass: dev                 # Linux の init はランダム生成(旧名 proxy_pass)
+    env_dir: /run/sashiki
+    sudo: true
+    mode: systemd                 # systemd | process
+    mysqld_bin: /usr/sbin/mysqld  # process モードの mysqld
+    run_user: mysql
+    extra_cnf: ""                 # プロジェクト固有の my.cnf
   postgres:                       # engine.type: postgres のときに読まれる
     port_range: [5433, 5632]
     bin_dir: /usr/lib/postgresql/16/bin
+    env_dir: /run/sashiki
     listen_addresses: 127.0.0.1
-    app_user: dev                 # baseline に作っておくロール(mysql の app_user 相当)
+    sudo: true
+    app_user: dev
     app_pass: dev
-    shared_buffers: 128M          # mysql の buffer_pool_size 相当
-    expected_rss: 600M            # 以下 3 つは mysql と同じ意味のメモリ admission
+    shared_buffers: 128M
+    expected_rss: 600M
     memory_headroom: 1G
     max_running: 10
-    mode: systemd                 # systemd | process(process は systemd 不要。macOS/コンテナ向け)
-    run_user: postgres            # root 起動時に降格する OS ユーザー
-    initdb_args: []               # baseline 構築時の initdb 追加引数(#223)
+    mode: systemd
+    run_user: postgres
+    initdb_args: []
+
+proxy:
+  max_conn_per_branch: 50
+  tls_cert: ""                    # tls_cert と tls_key は両方指定する
+  tls_key: ""
+  # allowed_user: dev             # 未設定 = app_user のみ、"" = 任意
 
 branches:
   name_pattern: "^[a-z0-9-]{1,32}$"
-  max_branches: 100
-  max_running: 10
-  default_storage_quota: 20GiB
+  max_branches: 50
+  lazy_create: true               # 未知のブランチ名で接続すると(認証後に)作る
+  lazy_create_max_wait: 20s
+  idle_stop_after: 30m
+  delete_after_idle: 168h
+  reaper_interval: 1m
+  operation_retention: 168h
+  error_retention: 72h            # error 状態になってからこの期間で削除(0 = 残す)
   default_profile: preview
+  profiles:
+    preview: { idle_stop_after: 30m, delete_after_idle: 168h }
+    ci:      { idle_stop_after: 5m,  delete_after_idle: 1h }
+    sandbox: { idle_stop_after: 1h,  delete_after_idle: 720h }
 
-profiles:
-  preview: { idle_stop_after: 30m, delete_after_idle: 168h }
-  ci:      { idle_stop_after: 5m,  delete_after_idle: 1h }
-  sandbox: { idle_stop_after: 1h,  delete_after_idle: 720h }
-
-baselines:
-  keep_last: 3
-  retention: 30d
+baseline:
+  refresh_script: /etc/sashiki/refresh.sh
+  refresh_timeout: 1h
+  source_dir: ""                  # refresh_script が無ければ *.sql を組み込みローダーで適用
+  source_db: ""
   require_masked: true
   require_validated: true
+  validate_port: 3999
+  masked_sentinel: /run/sashiki/baseline-masked
+  keep_last: 3
+  retention: 720h                 # Go の duration(d は使えない)。0 = 期間では残さない
 
 hooks:
   dir: /etc/sashiki/hooks
+  log_dir: /var/log/sashiki/hooks
   timeout: 10m
 
 auth:
-  api_token_ssm: /sashiki/shop/api-token   # or api_token_env: SASHIKI_API_TOKEN
+  api_token_env: SASHIKI_API_TOKEN
+  api_token_ssm: ""               # 指定すると SSM SecureString から読む(env より優先)
+  trust_loopback: true
 ```
 
 シークレットは書かない。環境変数 or SSM。

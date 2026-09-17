@@ -81,13 +81,13 @@ func pgSize(s string) string {
 	switch unit {
 	case "", "b":
 		return num + "B"
-	case "k", "kb":
+	case "k", "kb", "kib":
 		return num + "kB"
-	case "m", "mb":
+	case "m", "mb", "mib":
 		return num + "MB"
-	case "g", "gb":
+	case "g", "gb", "gib":
 		return num + "GB"
-	case "t", "tb":
+	case "t", "tb", "tib":
 		return num + "TB"
 	default:
 		return t

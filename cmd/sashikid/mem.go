@@ -5,7 +5,8 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"strings"
+
+	"github.com/rikukadev/sashiki/internal/config"
 )
 
 // availableMem は /proc/meminfo の MemAvailable(kB)を返す。
@@ -26,24 +27,12 @@ func availableMem() (int64, error) {
 	return kb * 1024, nil
 }
 
-// parseSize は "256M" / "1G" / "1024" をバイト数に変換する。不明なら 0。
+// parseSize はサイズ文字列をバイト数にする。書式の検証は config.Load が済ませて
+// いる(#300)ので、ここでは解釈できなければ 0 を返すだけ。
 func parseSize(s string) int64 {
-	s = strings.TrimSpace(strings.ToUpper(s))
-	if s == "" {
-		return 0
-	}
-	mult := int64(1)
-	switch s[len(s)-1] {
-	case 'K':
-		mult, s = 1024, s[:len(s)-1]
-	case 'M':
-		mult, s = 1024*1024, s[:len(s)-1]
-	case 'G':
-		mult, s = 1024*1024*1024, s[:len(s)-1]
-	}
-	n, err := strconv.ParseInt(s, 10, 64)
+	n, err := config.ParseSize(s)
 	if err != nil {
 		return 0
 	}
-	return n * mult
+	return n
 }
