@@ -194,6 +194,7 @@ func main() {
 		IdleStopAfter:      cfg.Branches.IdleStopAfter,
 		DeleteAfterIdle:    cfg.Branches.DeleteAfterIdle,
 		OperationRetention: cfg.Branches.OperationRetention,
+		ErrorRetention:     cfg.Branches.ErrorRetention,
 		Profiles:           profilePolicies(cfg.Branches.Profiles),
 		DefaultProfile:     cfg.Branches.DefaultProfile,
 		AvailableMem:       availableMem,

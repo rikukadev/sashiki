@@ -89,6 +89,9 @@ type Config struct {
 	// (operations テーブルの無限成長を防ぐ、#83)。0 = 削除しない。
 	OperationRetention time.Duration
 
+	// ErrorRetention: error 状態になってからこの期間で reaper が削除する(#298)。0 = 残す。
+	ErrorRetention time.Duration
+
 	// profile(仕様 11-3): 名前 → idle lifecycle。branch は create 時に
 	// profile を1つ持ち、reaper はその profile の閾値を使う。空なら全 branch が
 	// global(上の IdleStopAfter/DeleteAfterIdle)を使う。
@@ -174,6 +177,9 @@ type Manager struct {
 	baselinePolicy RefreshConfig
 	// baseline の set / GC / publish を直列化する(Fix 3)。
 	baselineMu sync.Mutex
+	// reapLogged は reaper が同じ理由で繰り返し失敗したときに毎 tick ログを
+	// 吐かないための直近メッセージ(#298)。reaper goroutine だけが触る。
+	reapLogged map[string]string
 	// validateMu は validateCandidate を直列化する。promote / refresh / validate は
 	// 共有名 _validate の volume と port を使うので、同時に走ると互いの候補を
 	// 消し合い、別候補の起動を見て validated=true にしてしまう(#310 review)。

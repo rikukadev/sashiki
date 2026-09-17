@@ -407,7 +407,7 @@ A. ディスクは CoW でほぼ増えないが、**mysqld はブランチごと
 
 **Q. profile と lease の違いは?**
 
-A. profile は「無接続が続いたら止める/消す」寿命ポリシー(preview/ci/sandbox)。lease(`--ttl` / `lease renew`)は「使用中でも必ず期限で回収する」絶対期限。CI で「最長 1 時間で必ず消える」を保証したいとき等に使う。
+A. profile は「無接続が続いたら止める/消す」寿命ポリシー(preview/ci/sandbox)。lease(`--ttl` / `lease renew`)は「使用中でも必ず期限で回収する」絶対期限で、`error` 状態のブランチにも効く。CI で「最長 1 時間で必ず消える」を保証したいとき等に使う。`error` 状態は調査のため idle では消さず、`branches.error_retention`(既定 72h、0 で残す)を過ぎたら削除する。promote 元(baseline の実体を持つ)ブランチはどの経路でも削除しない。
 
 **Q. PostgreSQL は?**
 

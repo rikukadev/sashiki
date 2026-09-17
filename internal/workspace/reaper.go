@@ -6,6 +6,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -35,7 +36,10 @@ func (m *Manager) RunReaper(ctx context.Context, interval time.Duration) {
 // Reap は 1 パス分の回収を行う。
 //   - running かつ IdleStopAfter 以上接続なし → 正常終了して sleeping
 //   - running/sleeping かつ DeleteAfterIdle 以上接続なし → 削除
-//     (error 状態はログ確認のため自動削除しない: 仕様 14-2)
+//   - error かつ ErrorRetention 以上経過 → 削除(#298)。error は調査のため
+//     すぐには消さない(仕様 14-2)が、無期限に残すと max_branches と port を
+//     占有し続ける
+//   - lease 失効は running / sleeping / error のどれでも削除
 func (m *Manager) Reap(ctx context.Context) error {
 	branches, err := m.db.ListBranches()
 	if err != nil {
@@ -43,10 +47,11 @@ func (m *Manager) Reap(ctx context.Context) error {
 	}
 	now := time.Now()
 	for _, b := range branches {
+		reapable := b.State == state.StateRunning || b.State == state.StateSleeping || b.State == state.StateError
 		// lease 失効(expires_at)は絶対期限。idle と違い「使用中でも」回収する
 		// (仕様 13-6: TTL/lease = correctness の担保)。activeConns の判定より先に見る。
-		if b.ExpiresAt != nil && now.After(*b.ExpiresAt) &&
-			(b.State == state.StateRunning || b.State == state.StateSleeping) {
+		// error 状態も対象(hook 失敗で放置されたブランチを TTL で回収する、#298)。
+		if b.ExpiresAt != nil && now.After(*b.ExpiresAt) && reapable {
 			backing, berr := m.backingBaselinesForBranch(ctx, b)
 			if berr != nil {
 				log.Printf("reaper: baseline protection check %s: %v (保護)", b.Name, berr)
@@ -64,9 +69,11 @@ func (m *Manager) Reap(ctx context.Context) error {
 				continue
 			}
 			log.Printf("reaper: deleting %s (lease expired %s ago)", b.Name, now.Sub(*b.ExpiresAt).Round(time.Second))
-			if err := m.Delete(ctx, b.Name); err != nil {
-				log.Printf("reaper: delete %s: %v", b.Name, err)
-			}
+			m.reapDelete(ctx, b.Name)
+			continue
+		}
+		if b.State == state.StateError {
+			m.reapError(ctx, b, now)
 			continue
 		}
 		activity := b.CreatedAt
@@ -125,9 +132,7 @@ func (m *Manager) Reap(ctx context.Context) error {
 				continue
 			}
 			log.Printf("reaper: deleting %s (idle %s, profile %q)", b.Name, idle.Round(time.Second), b.Profile)
-			if err := m.Delete(ctx, b.Name); err != nil {
-				log.Printf("reaper: delete %s: %v", b.Name, err)
-			}
+			m.reapDelete(ctx, b.Name)
 			continue
 		}
 		if stopDue {
@@ -174,4 +179,51 @@ func (m *Manager) Sleep(ctx context.Context, name string) error {
 		return err
 	}
 	return m.db.SetState(name, state.StateSleeping, "")
+}
+
+// reapError は error 状態のブランチを ErrorRetention 経過で削除する(#298)。
+// promote 元(baseline の実体を持つ)は消さない。
+func (m *Manager) reapError(ctx context.Context, b state.Branch, now time.Time) {
+	if m.cfg.ErrorRetention <= 0 {
+		return
+	}
+	if b.ErrorAt == nil {
+		// #298 以前に error になった行。retention はアップグレード時点から数える。
+		if err := m.db.MarkErrorAtIfMissing(b.Name); err != nil {
+			log.Printf("reaper: mark error_at %s: %v", b.Name, err)
+		}
+		return
+	}
+	age := now.Sub(*b.ErrorAt)
+	if age < m.cfg.ErrorRetention {
+		return
+	}
+	backing, err := m.backingBaselinesForBranch(ctx, b)
+	if err != nil || len(backing) > 0 {
+		m.reapLogOnce(b.Name, fmt.Sprintf("reaper: keeping error branch %s (backs baseline %v, err=%v)", b.Name, backing, err))
+		return
+	}
+	log.Printf("reaper: deleting error branch %s (error for %s: %s)", b.Name, age.Round(time.Second), b.ErrorCode)
+	m.reapDelete(ctx, b.Name)
+}
+
+// reapDelete は Delete し、失敗は同じ内容なら繰り返しログに出さない(#298)。
+func (m *Manager) reapDelete(ctx context.Context, name string) {
+	if err := m.Delete(ctx, name); err != nil {
+		m.reapLogOnce(name, fmt.Sprintf("reaper: delete %s: %v", name, err))
+		return
+	}
+	delete(m.reapLogged, name)
+}
+
+// reapLogOnce は name ごとに直前と同じメッセージなら出さない。
+func (m *Manager) reapLogOnce(name, msg string) {
+	if m.reapLogged == nil {
+		m.reapLogged = map[string]string{}
+	}
+	if m.reapLogged[name] == msg {
+		return
+	}
+	m.reapLogged[name] = msg
+	log.Print(msg)
 }

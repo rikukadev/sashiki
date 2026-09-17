@@ -161,6 +161,10 @@ type Branches struct {
 	DeleteAfterIdle    time.Duration `yaml:"delete_after_idle"`
 	ReaperInterval     time.Duration `yaml:"reaper_interval"`
 	OperationRetention time.Duration `yaml:"operation_retention"` // 完了 operation の保持期間(#83)。0=無期限
+	// ErrorRetention: error 状態になってからこの期間が過ぎたブランチを reaper が削除する
+	// (#298)。調べる時間を残しつつ、max_branches と port を占有し続けないように。
+	// 0 = 削除しない(従来の挙動)。lease(--ttl)はこれと無関係に error でも効く。
+	ErrorRetention time.Duration `yaml:"error_retention"`
 
 	// profile: 用途ごとに idle lifecycle を変える(仕様 11-3)。
 	// branch は create 時に profile を1つ持ち、reaper はその profile の
@@ -262,6 +266,7 @@ func Default() Config {
 			DeleteAfterIdle:    168 * time.Hour,
 			ReaperInterval:     time.Minute,
 			OperationRetention: 168 * time.Hour, // 7日
+			ErrorRetention:     72 * time.Hour,  // 3日(#298)
 
 			Profiles: map[string]ProfilePolicy{
 				"preview": {IdleStopAfter: 30 * time.Minute, DeleteAfterIdle: 168 * time.Hour},
