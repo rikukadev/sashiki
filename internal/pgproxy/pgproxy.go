@@ -177,6 +177,12 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	if s.cfg.AllowedUser != "" && user != s.cfg.AllowedUser {
 		return fatal(client, "28000", fmt.Sprintf("access denied for user %q", user))
 	}
+	// replication 接続(walsender)は app ロールのまま素通しすると、proxy の
+	// 認証だけで WAL をストリームできてしまう。ブランチ用途では要らないので
+	// 黙って通常接続にせず明示的に断る(#305)。
+	if r := su.params["replication"]; r != "" && r != "false" && r != "off" && r != "0" && r != "no" {
+		return fatal(client, "0A000", "replication connections are not supported through the sashiki proxy")
+	}
 
 	// 認証終端: app パスワードで検証する。ここを通るまで branch に触れない。
 	// 総当たり対策(#297): 同一接続元の同時試行を絞り、失敗が続いていれば
@@ -213,7 +219,7 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 		return fatal(client, "08006", "backend unavailable")
 	}
 	defer func() { _ = backend.Close() }()
-	if err := authenticateBackend(backend, s.cfg.AppUser, su.params["database"], s.cfg.AppPassword); err != nil {
+	if err := authenticateBackend(backend, s.cfg.AppUser, su.params, s.cfg.AppPassword); err != nil {
 		log.Printf("pgproxy: backend auth for %s@%s: %v", user, branch, err)
 		return fatal(client, "08006", "backend authentication failed")
 	}
