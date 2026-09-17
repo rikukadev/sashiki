@@ -216,6 +216,8 @@ GitHub Action なら `secrets.SASHIKI_API_TOKEN` を渡すだけ(下の使い方
 
 - サーバー側は、起動時に `SASHIKI_API_TOKEN` で渡した 1 個(後方互換)か、`sashiki token` で発行した state.db のトークン(ハッシュ照合)を検証する。
 - ローテーションは **新規発行 → 配布先を差し替え → 旧トークンを `sashiki token revoke`**。
+- `GET /v1/healthz` と Web UI の HTML(`GET /`)は認証なしで返す(LB のヘルスチェック用 / UI がトークンを入力させるため)。Web UI は 401 を受けるとトークン入力欄を出し、`Authorization` ヘッダで API を叩く(タブの sessionStorage に保存)ので、`trust_loopback: false` でも使える。データブラウザは admin スコープが要る。
+- `listen.metrics`(既定 `127.0.0.1:9100`)は**認証なし**。ブランチ名・容量が見えるので、loopback 以外で開くなら到達元をネットワークで絞る(起動時に警告を出す)。
 - ⚠️ 認証免除は「接続元が loopback か」で判定する。**リバースプロキシ越しに公開すると接続元が 127.0.0.1 に見えて素通しになる**ため、外部公開時は sashikid を直接 listen させるか、**`auth.trust_loopback: false`** を設定して loopback でも Bearer トークンを必須にすること。
 
 ### proxy(:3306)側の既定値

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -259,6 +260,14 @@ func main() {
 	go mgr.RunConnPoller(ctx, cfg.Branches.ReaperInterval)
 
 	if cfg.Listen.Metrics != "" {
+		// metrics は認証を持たない(Prometheus の scrape 前提)。ブランチ名・容量・
+		// メモリが見えるので、loopback 以外で開くなら到達元をネットワークで絞る(#301)。
+		if host, _, err := net.SplitHostPort(cfg.Listen.Metrics); err == nil {
+			if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+				log.Printf("sashikid: 警告 listen.metrics=%s は認証なしで loopback 以外に開いています。"+
+					"ブランチ名・容量が見えるので SG / ファイアウォールで到達元を絞ってください", cfg.Listen.Metrics)
+			}
+		}
 		go func() {
 			mux := http.NewServeMux()
 			mux.Handle("GET /metrics", api.MetricsHandler(mgr))

@@ -182,6 +182,15 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 
 // ServeHTTP は認証を通してからルーティングする。
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// 認証の外に置くもの(#301):
+	//   - GET /v1/healthz: LB / ALB のヘルスチェックはトークンを持たない。中身は
+	//     {"status":"ok"} だけで情報を出さない
+	//   - GET /: Web UI の HTML そのもの。データは含まず、UI はトークンを
+	//     入力させてから API を叩く(trust_loopback: false でも使えるように)
+	if r.Method == http.MethodGet && (r.URL.Path == "/v1/healthz" || r.URL.Path == "/") {
+		s.mux.ServeHTTP(w, r)
+		return
+	}
 	p, ok := s.authenticate(r)
 	if !ok {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "missing or invalid token")
