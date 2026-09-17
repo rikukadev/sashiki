@@ -46,6 +46,18 @@ jobs:
       - uses: actions/checkout@v7
       - run: ./e2e/action-ssm.sh
 
+  # install.sh を偽の curl で通す。macOS では **標準の /bin/bash(3.2)** で走らせる。
+  # README の `curl | bash` が実際に使うのはこの bash で、4.x 前提の構文が
+  # 混ざると手元の Homebrew bash では気づけない(#287)。
+  install-sh:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: /bin/bash ./e2e/install-sh.sh
+
   # ─────────────────────────────────────────────
   # 実 AWS の E2E。EC2 を 1 台立てて、利用者と同じ手順で入れて、捨てる。
   #

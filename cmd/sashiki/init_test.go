@@ -46,6 +46,7 @@ func TestEmbeddedUnitFile(t *testing.T) {
 	for _, want := range []string{
 		"EnvironmentFile=/run/sashiki/%i.env",
 		"--datadir=${DATADIR}",
+		"--bind-address=127.0.0.1",
 		"--port=${PORT}",
 		"User=mysql",
 	} {

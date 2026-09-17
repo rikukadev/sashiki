@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,12 +125,35 @@ func (m *mockStorage) LogicalBytes(ctx context.Context, vol storage.Volume) (int
 }
 
 type mockEngine struct {
-	started   []string
-	stopped   []string
-	killed    []string
-	startErr  error
-	connCount int   // ConnCount が返す接続数(#41)
-	connErr   error // ConnCount が返すエラー
+	started         []string
+	stopped         []string
+	killed          []string
+	startErr        error
+	connCount       int   // ConnCount が返す接続数(#41)
+	connErr         error // ConnCount が返すエラー
+	exposed         []string
+	exposeErr       error
+	exposureChecked []engine.Instance
+}
+
+type overlapCounter struct {
+	mu     sync.Mutex
+	active int
+	max    int
+}
+
+func (c *overlapCounter) ConnCount(context.Context, engine.Instance) (int, error) {
+	c.mu.Lock()
+	c.active++
+	if c.active > c.max {
+		c.max = c.active
+	}
+	c.mu.Unlock()
+	time.Sleep(10 * time.Millisecond)
+	c.mu.Lock()
+	c.active--
+	c.mu.Unlock()
+	return 0, nil
 }
 
 func (m *mockEngine) Start(ctx context.Context, ins engine.Instance) error {
@@ -153,6 +177,10 @@ func (m *mockEngine) IsRunning(ctx context.Context, ins engine.Instance) (bool, 
 }
 func (m *mockEngine) ConnCount(ctx context.Context, ins engine.Instance) (int, error) {
 	return m.connCount, m.connErr
+}
+func (m *mockEngine) ExposedListeners(ctx context.Context, instances []engine.Instance) ([]string, error) {
+	m.exposureChecked = append([]engine.Instance(nil), instances...)
+	return m.exposed, m.exposeErr
 }
 
 // --- helpers ---
@@ -609,6 +637,43 @@ func TestReapIdleStopAndTTLDelete(t *testing.T) {
 	}
 	if _, err := m.Get(context.Background(), "pr-1"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound after TTL delete", err)
+	}
+}
+
+func TestReapStopsButDoesNotDeleteBaselineBackingBranch(t *testing.T) {
+	ctx := context.Background()
+	eng := &mockEngine{}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
+	m := newTestManagerCfg(t, st, eng, "", func(c *Config) {
+		c.IdleStopAfter = time.Nanosecond
+		c.DeleteAfterIdle = time.Nanosecond
+	})
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.PromoteBranch(ctx, "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Millisecond)
+	if err := m.Reap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	info, err := m.Get(ctx, "pr-1")
+	if err != nil {
+		t.Fatalf("baseline backing branch must survive reaper: %v", err)
+	}
+	if info.State != state.StateSleeping {
+		t.Errorf("state = %s, want sleeping", info.State)
+	}
+	if len(info.BackingBaselines) == 0 {
+		t.Error("promote source should still retain its baseline")
+	}
+	// sleeping になった後の次 tick でも Delete を試さず保持する。
+	if err := m.Reap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(ctx, "pr-1"); err != nil {
+		t.Fatalf("protected sleeping branch must survive subsequent reaper passes: %v", err)
 	}
 }
 
@@ -1135,7 +1200,16 @@ func TestReconcileDetectsOrphans(t *testing.T) {
 
 func TestDoctorReportsIssues(t *testing.T) {
 	st := &mockStorage{poolUsed: 50, poolTotal: 100, volumes: []string{"pr-1"}}
-	m := newTestManager(t, st, &mockEngine{}, "")
+	eng := &mockEngine{exposed: []string{"pr-1 (10.0.0.10:3401)"}}
+	m := newTestManager(t, st, eng, "")
+	if err := m.db.CreateBranch("pr-1", 3401, "pool/base@b1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-1", state.StateRunning, "")
+	if err := m.db.CreateBranch("pr-sleep", 3402, "pool/base@b1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-sleep", state.StateSleeping, "")
 	_ = m.db.RegisterBaseline("pool/base@b1", state.BaselineProvenance{})
 	_ = m.db.SetCurrentBaseline("pool/base@b1")
 	d, err := m.Doctor(context.Background())
@@ -1168,6 +1242,15 @@ func TestDoctorReportsIssues(t *testing.T) {
 	}
 	if status["baseline validated"] != checkWarn {
 		t.Errorf("baseline validated check = %q, want warn (empty provenance)", status["baseline validated"])
+	}
+	if status["branch listener exposure"] != checkWarn {
+		t.Errorf("branch listener exposure check = %q, want warn", status["branch listener exposure"])
+	}
+	if len(d.ExposedListeners) != 1 || !strings.Contains(d.ExposedListeners[0], "10.0.0.10:3401") {
+		t.Errorf("exposed listeners = %v", d.ExposedListeners)
+	}
+	if len(eng.exposureChecked) != 1 || eng.exposureChecked[0].Branch != "pr-1" {
+		t.Errorf("listener exposure should check running branches only, got %+v", eng.exposureChecked)
 	}
 }
 
@@ -1390,6 +1473,76 @@ func TestReaperSkipsBranchWithPolledConns(t *testing.T) {
 	}
 }
 
+// connpoll が直接接続をまだキャッシュしていない瞬間でも、reaper は停止直前に
+// engine の現在値を再確認して active branch を保護する。
+func TestReaperChecksEngineBeforeIdleStop(t *testing.T) {
+	eng := &mockEngine{connCount: 1}
+	m := newTestManagerCfg(t, &mockStorage{}, eng, "", func(c *Config) {
+		c.IdleStopAfter = 10 * time.Millisecond
+		c.DeleteAfterIdle = time.Hour
+	})
+	if _, err := m.Create(context.Background(), "pr-race", 0); err != nil {
+		t.Fatal(err)
+	}
+	// pollConnsOnce は意図的に呼ばない。cached count=0 のまま閾値を超える。
+	time.Sleep(15 * time.Millisecond)
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := m.Get(context.Background(), "pr-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State != state.StateRunning {
+		t.Errorf("state = %s, want running (synchronous engine check protects active conn)", info.State)
+	}
+	if info.LastConnAt == nil {
+		t.Error("synchronous engine check should refresh last_conn_at")
+	}
+}
+
+func TestReaperDoesNotProbeSleepingBranchBeforeDelete(t *testing.T) {
+	eng := &mockEngine{connErr: errors.New("listener is stopped")}
+	m := newTestManagerCfg(t, &mockStorage{}, eng, "", func(c *Config) {
+		c.IdleStopAfter = time.Hour
+		c.DeleteAfterIdle = 10 * time.Millisecond
+	})
+	if _, err := m.Create(context.Background(), "pr-sleeping", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.db.SetState("pr-sleeping", state.StateSleeping, ""); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(15 * time.Millisecond)
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(context.Background(), "pr-sleeping"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("sleeping branch should be deleted without probing stopped listener, got %v", err)
+	}
+}
+
+func TestConnectionChecksAreSerialized(t *testing.T) {
+	m := &Manager{}
+	counter := &overlapCounter{}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := m.checkedConnCount(context.Background(), counter, engine.Instance{Branch: "pr-1", Port: 3401}); err != nil {
+				t.Errorf("checkedConnCount: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	counter.mu.Lock()
+	defer counter.mu.Unlock()
+	if counter.max != 1 {
+		t.Fatalf("concurrent connection checks = %d, want 1", counter.max)
+	}
+}
+
 // --- #82 create --baseline ---
 
 func TestCreateFromBaseline(t *testing.T) {
@@ -1571,6 +1724,50 @@ func TestDeleteRefusesBranchBackingBaseline(t *testing.T) {
 	}
 	if err := m.Delete(ctx, "pr-2"); err != nil {
 		t.Errorf("non-backing branch should delete cleanly: %v", err)
+	}
+}
+
+// promote 元 dataset 上の baseline を reset/recreate が破壊しないこと(#289)。
+// precondition は状態変更や storage 操作より前に判定する。
+func TestResetAndRecreateRefuseBranchBackingBaseline(t *testing.T) {
+	ctx := context.Background()
+	eng := &mockEngine{}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
+	m := newTestManager(t, st, eng, "")
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := m.PromoteBranch(ctx, "pr-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{name: "reset", run: func() error { _, err := m.Reset(ctx, "pr-1"); return err }},
+		{name: "recreate", run: func() error { _, err := m.Recreate(ctx, "pr-1"); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.run(); !errors.Is(err, ErrPreconditionFailed) {
+				t.Fatalf("%s should refuse baseline-backing branch, got %v", tc.name, err)
+			}
+		})
+	}
+	if len(st.rollbacks) != 0 || len(st.renamed) != 0 {
+		t.Fatalf("refused operations mutated storage: rollbacks=%v renamed=%v", st.rollbacks, st.renamed)
+	}
+	b, err := m.db.GetBranch("pr-1")
+	if err != nil || b.State != state.StateRunning {
+		t.Fatalf("branch changed after refused operations: branch=%+v err=%v", b, err)
+	}
+	info, err := m.Get(ctx, "pr-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.BackingBaselines) != 1 || info.BackingBaselines[0] != snap {
+		t.Fatalf("backing baselines=%v, want [%s]", info.BackingBaselines, snap)
 	}
 }
 

@@ -219,6 +219,8 @@ type branchView struct {
 	Recoverable  bool     `json:"recoverable"`
 	Suggestions  []string `json:"suggested_actions"`
 	Stale        bool     `json:"stale"`
+	// promote 元として baseline 実体を保持している。reset / recreate / delete 不可(#289)。
+	BackingBaselines []string `json:"backing_baselines"`
 }
 
 // --- commands ---
@@ -479,7 +481,7 @@ func cmdList(args []string) int {
 	_ = json.Unmarshal(data, &resp)
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, "NAME\tPORT\tSTATE\tLAST_CONN\tUSED")
-	var stale []string
+	var stale, backing []string
 	for _, b := range resp.Branches {
 		last := "-"
 		if b.LastConnAt != nil {
@@ -490,11 +492,18 @@ func cmdList(args []string) int {
 			name += "*"
 			stale = append(stale, b.Name)
 		}
+		if len(b.BackingBaselines) > 0 {
+			name += "!"
+			backing = append(backing, b.Name)
+		}
 		_, _ = fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\n", name, b.Port, b.State, last, humanBytes(b.UsedBytes))
 	}
 	_ = tw.Flush()
 	if len(stale) > 0 {
 		fmt.Printf("\n* origin が current baseline より古い(recreate で最新化): %s\n", strings.Join(stale, ", "))
+	}
+	if len(backing) > 0 {
+		fmt.Printf("\n! baseline の実体を保持(promote 元。reset / recreate / delete 不可): %s\n", strings.Join(backing, ", "))
 	}
 	return exitOK
 }
@@ -527,6 +536,10 @@ func cmdShow(args []string) int {
 	}
 	if b.Stale {
 		fmt.Println("stale:   true (origin が current baseline より古い。reset は作成時点に戻る/最新化は recreate)")
+	}
+	if len(b.BackingBaselines) > 0 {
+		fmt.Printf("baseline: %s を保持(promote 元。reset / recreate / delete は別 baseline を promote/set するまで拒否)\n",
+			strings.Join(b.BackingBaselines, ", "))
 	}
 	if b.Error != "" {
 		fmt.Printf("error: %s\n", b.Error)

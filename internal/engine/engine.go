@@ -35,3 +35,11 @@ type Engine interface {
 type ConnCounter interface {
 	ConnCount(ctx context.Context, ins Instance) (int, error)
 }
+
+// ListenerExposureChecker は branch の DB listener が loopback 以外のローカル
+// アドレスから到達できないかを診断する。proxy が認証を終端する構成では、直結
+// ポートの外部公開は認証・接続数制限を迂回するため doctor が警告する(#288)。
+// 戻り値は "branch (address)" 形式の到達可能な listener。
+type ListenerExposureChecker interface {
+	ExposedListeners(ctx context.Context, instances []Instance) ([]string, error)
+}

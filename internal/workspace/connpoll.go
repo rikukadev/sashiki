@@ -57,9 +57,7 @@ func (m *Manager) pollConnsOnce(ctx context.Context, cc engine.ConnCounter) {
 		if b.State != state.StateRunning {
 			continue
 		}
-		cctx, cancel := context.WithTimeout(ctx, connPollTimeout)
-		n, err := cc.ConnCount(cctx, engine.Instance{Branch: b.Name, Port: b.Port})
-		cancel()
+		n, err := m.checkedConnCount(ctx, cc, engine.Instance{Branch: b.Name, Port: b.Port})
 		if err != nil {
 			// 判定不能: 保護側に倒す(使用中として扱い reaper の対象から外す)。
 			log.Printf("connpoll: %s: %v (使用中として保護)", b.Name, err)
@@ -76,4 +74,15 @@ func (m *Manager) pollConnsOnce(ctx context.Context, cc engine.ConnCounter) {
 	m.pollMu.Lock()
 	m.pollConns = counts
 	m.pollMu.Unlock()
+}
+
+// checkedConnCount は内部の接続数チェックを直列化する。MySQL の ConnCount は
+// Threads_connected から自分自身を1つ引くため、監視が同時実行されると相手の
+// 監視接続を実クライアントと誤認する。timeout は lock 獲得後から数える。
+func (m *Manager) checkedConnCount(ctx context.Context, cc engine.ConnCounter, ins engine.Instance) (int, error) {
+	m.connCheckMu.Lock()
+	defer m.connCheckMu.Unlock()
+	cctx, cancel := context.WithTimeout(ctx, connPollTimeout)
+	defer cancel()
+	return cc.ConnCount(cctx, ins)
 }

@@ -6,6 +6,7 @@ package mysql
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,10 +126,13 @@ func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
 	}
 	// MYSQLD_DEFAULTS: extra_cnf 指定時は --defaults-file=<path> を出し、ユニットの
 	// ExecStart 先頭で使う(branch の mysqld にも extra_cnf を効かせる、#169)。
-	// 未指定なら空(従来どおり既定 my.cnf を読む)。
-	defaults := ""
+	// bind-address もここへ入れる。古い mysqld@.service も $MYSQLD_DEFAULTS は
+	// 展開するため、パッケージ更新後に init を再実行していないホストでも次の
+	// Start から branch listener を loopback に閉じられる(#288)。
+	defaults := "--bind-address=127.0.0.1"
 	if e.cfg.ExtraCnf != "" {
-		defaults = "--defaults-file=" + e.cfg.ExtraCnf
+		// --defaults-file は mysqld の第1引数でなければならない。
+		defaults = "--defaults-file=" + e.cfg.ExtraCnf + " " + defaults
 	}
 	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\nMYSQLD_DEFAULTS=%s\n", ins.Port, ins.DataDir, defaults)
 	if err := os.WriteFile(e.envPath(ins.Branch), []byte(env), 0o644); err != nil {
@@ -216,4 +220,42 @@ func (e *Engine) ConnCount(ctx context.Context, ins engine.Instance) (int, error
 		n-- // 自分の接続を除く
 	}
 	return n, nil
+}
+
+// ExposedListeners は各 branch port へ非 loopback のローカル IP から TCP 接続を
+// 試し、到達できる listener を返す。127.0.0.1 / ::1 のみに bind していれば、
+// 同じホストの private IP 宛てでも接続できない。MySQL handshake には進まず、TCP
+// 接続が成立した時点ですぐ閉じる(#288)。
+func (e *Engine) ExposedListeners(ctx context.Context, instances []engine.Instance) ([]string, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, fmt.Errorf("list interface addresses: %w", err)
+	}
+	var ips []net.IP
+	for _, addr := range addrs {
+		ip, _, err := net.ParseCIDR(addr.String())
+		if err != nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		ips = append(ips, ip)
+	}
+
+	var exposed []string
+	for _, ins := range instances {
+		for _, ip := range ips {
+			addr := net.JoinHostPort(ip.String(), strconv.Itoa(ins.Port))
+			dialer := net.Dialer{Timeout: 200 * time.Millisecond}
+			conn, err := dialer.DialContext(ctx, "tcp", addr)
+			if err != nil {
+				if ctx.Err() != nil {
+					return exposed, ctx.Err()
+				}
+				continue
+			}
+			_ = conn.Close()
+			exposed = append(exposed, fmt.Sprintf("%s (%s)", ins.Branch, addr))
+			break // branch ごとに代表アドレスを1つ報告すれば十分
+		}
+	}
+	return exposed, nil
 }

@@ -67,7 +67,7 @@ profile は用途ごとの寿命(idle 停止 / 自動削除)を表す。`create 
 ### 1. インストール
 
 ```bash
-# 最新 release を取得して導入(Linux=deb / macOS=tar.gz を自動判別)
+# 最新 release を取得して導入(Linux=deb / macOS=tar.gz を自動判別。release の checksums.txt で sha256 を照合)
 curl -fsSL https://raw.githubusercontent.com/rikukadev/sashiki/main/install.sh | sudo bash
 ```
 
@@ -98,6 +98,10 @@ sashiki baseline promote pr-123   # pr-123 の現在の datadir を新しい cur
 ```
 
 `promote` は snapshot 不変条件のため対象ブランチを一度 graceful stop し、昇格後に再起動する(既存の他ブランチの origin は変えない)。
+promote したブランチは新 baseline の**実体**(snapshot)を保持するので、別の baseline を
+promote / set するまで **reset / recreate / delete は 412 で拒否**される(`list` では `!`、
+`show` では `baseline:` 行で分かる)。「promote → そのブランチで作業を続ける」なら、
+先に `recreate` で新 baseline から作り直したブランチを使う。
 
 ### 4. ブランチを払い出す
 
@@ -148,6 +152,11 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 13306                  # 未知ブラン�
 - 要件: `privileged`(loopback FS のマウント用)と reflink 対応 FS。ホストの OS は問わない。
 - ポート: REST / Web UI が `:8080`、proxy が `:3306`(compose ではホスト側の衝突回避で
   `13306:3306` に割り当て済み。上の例が `-P 13306` なのはこのため)。
+- データ: ブランチ・baseline(XFS イメージ)・state.db・config は named volume `sashiki-xfs`
+  に置く。`docker compose down` では残り、`down -v` で消える。XFS のサイズは初回のみ
+  `XFS_SIZE_MB`(既定 2048)で決まる。
+- API はコンテナ外(ホスト)から見ると loopback ではないので、CLI / Web UI をホストから
+  使うには `SASHIKI_API_TOKEN` が要る(`docker compose exec sashiki sashiki token create --name dev`)。
 
 ディレクトリ名は歴史的経緯で `deploy/orbstack/` だが、**特定の製品に依存しない**
 (Docker 互換ランタイム全般で動く)。詳細は [deploy/orbstack/README.md](deploy/orbstack/)。
@@ -253,6 +262,11 @@ module "db" {
 EC2 + EBS(prevent_destroy)+ SG + IAM + Route53 + Secrets/SSM を 1 apply。
 apply 完了時点で sashikid が稼働する。詳細は [deploy/terraform/README.md](deploy/terraform/)。
 
+出力 `api_url` は **http**(TLS 終端なし)で、`allowed_sg_ids` の SG からだけ届く。
+VPC 外(GitHub-hosted runner 等)からは Action の `transport: ssm` を使う。
+Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したときだけ作られ、
+渡さなければ `endpoint` は private IP になる。
+
 > **インスタンスを差し替えてもブランチデータは残る**(#246)。`user_data` や AMI を変えて
 > EC2 が作り直されても、データ EBS は `prevent_destroy` で保持される。新しいインスタンスの
 > `sashiki init` は **既存の zpool を検出して `import` し、そのまま再利用する**(pool が無い
@@ -268,6 +282,10 @@ apply 完了時点で sashikid が稼働する。詳細は [deploy/terraform/REA
 - **profile / lease**: 用途ごとの idle lifecycle(preview / ci / sandbox)+ `--ttl` / `lease renew` の絶対期限
 - **proxy(:3306 固定エンドポイント)**: `mysql -udev@<branch>` でルーティング。**認証終端(方式A)**——sashiki がパスワードを検証し、**認証後に** lazy create(認証前のリソース確保を防ぐ)。TLS 終端対応(`proxy.tls_cert`)
 - **アイドル管理**: 無接続で mysqld 停止(`sleeping`)、再接続で起床。engine ポーリングで接続を追跡するので proxy を通らない接続でも正しく判定。TTL / lease で自動削除
+
+> **セキュリティ:** branch ごとの MySQL ポート(`3401-3600`)は内部用で、既定では
+> `127.0.0.1` にだけ bind する。外部クライアントには認証終端の proxy(`3306`)だけを
+> 公開し、branch ポートを Security Group・ファイアウォール・ポート転送で公開しないこと。
 - **baseline**: build → validate → publish。PII マスキングを必須化できる。`baseline set` で即ロールバック、`baseline promote` で検証済みブランチを次の baseline に昇格
 - **capacity 管理**: メモリ admission(不足時は新規を拒否して既存 mysqld を OOM から守る)、storage watermark、`sashiki capacity`
 - **運用**: 起動時 reconciliation、`sashiki doctor`、orphan GC、`sashiki drain`、構造化ログ + Prometheus メトリクス、Web UI

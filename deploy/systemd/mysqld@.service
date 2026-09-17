@@ -10,6 +10,7 @@ Group=mysql
 EnvironmentFile=/run/sashiki/%i.env
 ExecStart=/usr/sbin/mysqld $MYSQLD_DEFAULTS \
   --datadir=${DATADIR} \
+  --bind-address=127.0.0.1 \
   --port=${PORT} \
   --socket=/tmp/mysql-%i.sock \
   --pid-file=/tmp/mysql-%i.pid \

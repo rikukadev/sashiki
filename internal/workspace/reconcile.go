@@ -9,6 +9,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/rikukadev/sashiki/internal/engine"
 	"github.com/rikukadev/sashiki/internal/state"
 	"github.com/rikukadev/sashiki/internal/storage"
 )
@@ -142,6 +143,7 @@ type DoctorReport struct {
 	StateDBWritable   bool // state.db が書き込み可能か(#88)
 	BranchCount       int
 	PortConflicts     []string
+	ExposedListeners  []string
 	Orphans           []string
 	MemHeadroomOK     bool
 	Issues            []string
@@ -206,6 +208,29 @@ func (m *Manager) Doctor(ctx context.Context) (DoctorReport, error) {
 		add("port conflicts", checkOK, "")
 	} else {
 		add("port conflicts", checkError, strings.Join(d.PortConflicts, "; "))
+	}
+
+	// branch の直結ポートが非 loopback で待ち受けていると、proxy の認証終端を
+	// 迂回できる。対応 engine では実 listener を確認し、露出は警告する(#288)。
+	if checker, ok := m.eng.(engine.ListenerExposureChecker); ok {
+		instances := make([]engine.Instance, 0, len(branches))
+		for _, b := range branches {
+			if b.State != state.StateRunning {
+				continue
+			}
+			instances = append(instances, engine.Instance{Branch: b.Name, Port: b.Port})
+		}
+		exposed, err := checker.ExposedListeners(ctx, instances)
+		switch {
+		case err != nil:
+			add("branch listener exposure", checkWarn, "確認できません: "+err.Error())
+		case len(exposed) > 0:
+			d.ExposedListeners = exposed
+			add("branch listener exposure", checkWarn, strings.Join(exposed, "; ")+" は loopback 以外から到達可能。"+
+				"systemd 構成は `sudo sashiki init --skip-packages --yes` で unit を更新し、branch を再起動してください")
+		default:
+			add("branch listener exposure", checkOK, "loopback only")
+		}
 	}
 
 	// pool 健全性(zpool status -x 相当)

@@ -164,6 +164,23 @@ grep -q READY <<<"${out:-}" || {
 }
 echo "  provisioned"
 
+# Terraform の api_url は「SG 内から Bearer で叩く」経路(#286)。loopback から
+# 叩くだけの検証では、sashikid が 127.0.0.1 にしか bind していなくても通って
+# しまう。自分の private IP 宛てに叩けば loopback 免除を通らないので、bind と
+# 認証の両方が見える。
+log "API に loopback 以外から届く(トークン必須)"
+out=$(ssm '
+set -eu
+IP=$(hostname -I | awk "{print \$1}")
+TOKEN=$(cat /var/tmp/sashiki-e2e-token)
+noauth=$(curl -s -o /dev/null -w "%{http_code}" "http://$IP:8080/v1/branches")
+auth=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" "http://$IP:8080/v1/branches")
+echo "ip=$IP noauth=$noauth auth=$auth"
+') || fail "API の到達確認に失敗した"
+echo "  $out"
+grep -q "noauth=401" <<<"$out" || fail "loopback 以外からトークン無しで通ってしまう: $out"
+grep -q "auth=200" <<<"$out" || fail "loopback 以外からトークン付きで届かない(listen.api が loopback のまま?): $out"
+
 log "branch を作って proxy 経由で読む"
 out=$(ssm '
 set -eu
