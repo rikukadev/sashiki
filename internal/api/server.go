@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +26,34 @@ import (
 
 // TokenChecker は Bearer トークンの検証(state.db の tokens テーブル)。
 type TokenChecker interface {
-	CheckTokenHash(hash string) (bool, error)
+	LookupTokenHash(hash string) (name, scope string, ok bool, err error)
+}
+
+// principal は認証を通った呼び出し元(#294)。scope で admin 専用の経路を絞る。
+type principal struct {
+	Name  string // "loopback" / "env" / token 名
+	Scope string // state.ScopeAdmin | state.ScopeBranches
+}
+
+type principalKey struct{}
+
+// adminOnlyBranchPath は branches スコープに許さない branch 配下の経路。
+// query / schema は app 資格情報で任意 SQL(Postgres は SUPERUSER、MySQL は
+// GRANT ALL)を流せるので OS コマンド実行に等しい。hooks は hooks dir の
+// 実行ファイルを起動する。
+var adminOnlyBranchPath = regexp.MustCompile(`^/v1/branches/[^/]+/(query|schema|hooks/)`)
+
+// adminOnly は admin スコープが要る要求か(#294)。branches スコープ(CI に配る
+// トークン)にはブランチのライフサイクルと読み取りだけを許す。
+func adminOnly(r *http.Request) bool {
+	p := r.URL.Path
+	if adminOnlyBranchPath.MatchString(p) {
+		return true
+	}
+	if r.Method != http.MethodPost {
+		return false
+	}
+	return strings.HasPrefix(p, "/v1/baseline/") || strings.HasPrefix(p, "/v1/gc/") || p == "/v1/drain"
 }
 
 // Server は REST API サーバー。
@@ -154,46 +182,68 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 
 // ServeHTTP は認証を通してからルーティングする。
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(r) {
+	p, ok := s.authenticate(r)
+	if !ok {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "missing or invalid token")
 		return
 	}
-	s.mux.ServeHTTP(w, r)
+	if p.Scope != state.ScopeAdmin && adminOnly(r) {
+		writeErr(w, http.StatusForbidden, "insufficient_scope",
+			fmt.Sprintf("token %q (scope %s) cannot %s %s: admin scope required", p.Name, p.Scope, r.Method, r.URL.Path))
+		return
+	}
+	s.mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 }
 
-// authorized: localhost からは無認証、それ以外は Bearer トークン(仕様 13-3)。
+// callerOf は要求の principal(無ければ空)を返す。監査ログ用。
+func callerOf(r *http.Request) principal {
+	if p, ok := r.Context().Value(principalKey{}).(principal); ok {
+		return p
+	}
+	return principal{}
+}
+
+// authorized: 認証を通るか(scope は見ない)。
 func (s *Server) authorized(r *http.Request) bool {
+	_, ok := s.authenticate(r)
+	return ok
+}
+
+// authenticate: localhost からは無認証(admin)、それ以外は Bearer トークン(仕様 13-3)。
+// env トークン(SASHIKI_API_TOKEN / Terraform 生成)は後方互換で admin。
+// state.db のトークンは発行時の scope を持つ(#294)。
+func (s *Server) authenticate(r *http.Request) (principal, bool) {
 	if s.trustLoopback {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err == nil {
 			if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-				return true
+				return principal{Name: "loopback", Scope: state.ScopeAdmin}, true
 			}
 		}
 	}
 	got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if got == "" {
-		return false
+		return principal{}, false
 	}
 	gh := sha256.Sum256([]byte(got))
 	if s.token != "" {
 		th := sha256.Sum256([]byte(s.token))
 		if subtle.ConstantTimeCompare(gh[:], th[:]) == 1 {
-			return true
+			return principal{Name: "env", Scope: state.ScopeAdmin}, true
 		}
 	}
 	if s.tokens != nil {
-		ok, err := s.tokens.CheckTokenHash(hex.EncodeToString(gh[:]))
+		name, scope, ok, err := s.tokens.LookupTokenHash(hex.EncodeToString(gh[:]))
 		if err != nil {
 			// DB 障害を無言の 401 にしない(認証失敗とは区別してログに残す)
 			log.Printf("api: token check failed: %v", err)
-			return false
+			return principal{}, false
 		}
 		if ok {
-			return true
+			return principal{Name: name, Scope: scope}, true
 		}
 	}
-	return false
+	return principal{}, false
 }
 
 // --- handlers ---
@@ -660,6 +710,8 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRunHook(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	event := hooks.Event(r.PathValue("event"))
+	// 誰が何を走らせたか残す(#294)。
+	log.Printf("api: hook run branch=%s event=%s by=%s", name, event, callerOf(r).Name)
 	if err := s.mgr.RunHookManually(r.Context(), name, event); err != nil {
 		s.writeError(w, err)
 		return

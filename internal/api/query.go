@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"mime"
 	"net"
 	"net/http"
@@ -204,6 +205,8 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_request", "body must be {\"sql\": \"...\"}")
 		return
 	}
+	// 監査: app 資格情報で任意 SQL を流せる経路なので、誰が何を流したか残す(#294)。
+	log.Printf("api: query branch=%s by=%s sql=%q", name, callerOf(r).Name, truncateForLog(req.SQL, 200))
 	db, err := s.openDB(r.Context(), name)
 	if err != nil {
 		s.writeError(w, err)
@@ -285,4 +288,12 @@ func (s *Server) schemaQuery() string {
 		return pgSchemaQuery
 	}
 	return mysqlSchemaQuery
+}
+
+// truncateForLog はログ用に文字列を n 文字で切る。
+func truncateForLog(v string, n int) string {
+	if len(v) <= n {
+		return v
+	}
+	return v[:n] + "…"
 }

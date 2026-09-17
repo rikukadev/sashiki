@@ -94,6 +94,7 @@ func Open(path string) (*DB, error) {
 		"ALTER TABLE branches ADD COLUMN engine_state TEXT",
 		"ALTER TABLE branches ADD COLUMN init_snapshot TEXT",
 		"ALTER TABLE branches ADD COLUMN volume_ref TEXT",
+		"ALTER TABLE tokens ADD COLUMN scope TEXT", // #294: NULL は admin(旧トークン互換)
 		"ALTER TABLE baselines ADD COLUMN source_revision TEXT",
 		"ALTER TABLE baselines ADD COLUMN schema_revision TEXT",
 		"ALTER TABLE baselines ADD COLUMN data_as_of TEXT",
@@ -492,15 +493,29 @@ func (d *DB) LastHookStatus(branch string) (map[string]string, error) {
 // Token は tokens テーブルの 1 行。
 type Token struct {
 	Name       string
+	Scope      string // "admin" | "branches"(#294)。旧行(NULL)は admin
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 }
 
+// トークンのスコープ(#294)。
+const (
+	// ScopeAdmin は全操作。baseline の publish / promote、drain、gc、データブラウザ、
+	// hook 手動実行を含む。loopback と env トークンはこれ。
+	ScopeAdmin = "admin"
+	// ScopeBranches はブランチのライフサイクルと読み取りだけ。CI / Action に配る想定。
+	ScopeBranches = "branches"
+)
+
 // CreateToken はトークンのハッシュを保存する。同名は上書きしない。
-func (d *DB) CreateToken(name, hash string) error {
+// scope が空なら admin(旧 CLI 互換)。
+func (d *DB) CreateToken(name, hash, scope string) error {
+	if scope == "" {
+		scope = ScopeAdmin
+	}
 	_, err := d.sql.Exec(
-		`INSERT INTO tokens (name, hash, created_at) VALUES (?, ?, ?)`,
-		name, hash, time.Now().UTC().Format(timeFmt))
+		`INSERT INTO tokens (name, hash, created_at, scope) VALUES (?, ?, ?, ?)`,
+		name, hash, time.Now().UTC().Format(timeFmt), scope)
 	return err
 }
 
@@ -518,7 +533,7 @@ func (d *DB) RevokeToken(name string) error {
 
 // ListTokens は一覧(ハッシュは返さない)。
 func (d *DB) ListTokens() ([]Token, error) {
-	rows, err := d.sql.Query(`SELECT name, created_at, last_used_at FROM tokens ORDER BY created_at`)
+	rows, err := d.sql.Query(`SELECT name, created_at, last_used_at, scope FROM tokens ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -527,9 +542,13 @@ func (d *DB) ListTokens() ([]Token, error) {
 	for rows.Next() {
 		var t Token
 		var created string
-		var lastUsed sql.NullString
-		if err := rows.Scan(&t.Name, &created, &lastUsed); err != nil {
+		var lastUsed, scope sql.NullString
+		if err := rows.Scan(&t.Name, &created, &lastUsed, &scope); err != nil {
 			return nil, err
+		}
+		t.Scope = ScopeAdmin
+		if scope.Valid && scope.String != "" {
+			t.Scope = scope.String
 		}
 		if ts, err := time.Parse(timeFmt, created); err == nil {
 			t.CreatedAt = ts
@@ -544,15 +563,30 @@ func (d *DB) ListTokens() ([]Token, error) {
 	return out, rows.Err()
 }
 
-// CheckTokenHash はハッシュが登録済みなら true を返し、last_used_at を更新する。
-func (d *DB) CheckTokenHash(hash string) (bool, error) {
-	res, err := d.sql.Exec(`UPDATE tokens SET last_used_at = ? WHERE hash = ?`,
-		time.Now().UTC().Format(timeFmt), hash)
-	if err != nil {
-		return false, err
+// LookupTokenHash はハッシュが登録済みなら name / scope を返し、last_used_at を
+// 更新する。未登録なら ok=false。旧行(scope NULL)は admin として返す(#294)。
+func (d *DB) LookupTokenHash(hash string) (name, scope string, ok bool, err error) {
+	var sc sql.NullString
+	err = d.sql.QueryRow(`SELECT name, scope FROM tokens WHERE hash = ?`, hash).Scan(&name, &sc)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	if err != nil {
+		return "", "", false, err
+	}
+	scope = ScopeAdmin
+	if sc.Valid && sc.String != "" {
+		scope = sc.String
+	}
+	_, _ = d.sql.Exec(`UPDATE tokens SET last_used_at = ? WHERE hash = ?`,
+		time.Now().UTC().Format(timeFmt), hash)
+	return name, scope, true, nil
+}
+
+// CheckTokenHash はハッシュが登録済みなら true を返す(scope を見ない旧 API)。
+func (d *DB) CheckTokenHash(hash string) (bool, error) {
+	_, _, ok, err := d.LookupTokenHash(hash)
+	return ok, err
 }
 
 // BaselineProvenance は baseline の来歴(仕様 12-1)。schema の鮮度と data の
