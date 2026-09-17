@@ -200,6 +200,17 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	//    (認証前 lazy create の DoS 構造を解消 — #7 / #51)。
 	// クライアントの応答長で認証方式を判別する(#197): 32byte=caching_sha2
 	// (MySQL 8.0 既定 / 9.x)、20byte=mysql_native_password(旧クライアント)。
+	// 総当たり対策(#297)。同一接続元の同時試行を絞り、失敗が続いていれば
+	// **検証の前に**待たせる。検証後に遅らせるだけだと並列接続で迂回できる。
+	src := authlimit.Key(client.RemoteAddr())
+	if !s.limiter.Acquire(src) {
+		return authErr(client, seq+1, 1040, "08004", "Too many concurrent authentication attempts")
+	}
+	defer s.limiter.Release(src)
+	authlimit.Sleep(ctx, s.limiter.Penalty(src))
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	sha2 := len(hr.authResp) != 20
 	verified := false
 	if sha2 {
@@ -207,10 +218,8 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	} else {
 		verified = verifyNativePassword(s.cfg.AppPassword, salt, hr.authResp)
 	}
-	src := authlimit.Key(client.RemoteAddr())
 	if !verified {
-		// 失敗が続く接続元には応答を遅らせる(総当たり対策、#297)。
-		authlimit.Sleep(ctx, s.limiter.Fail(src))
+		s.limiter.Fail(src)
 		return authErr(client, seq+1, 1045, "28000",
 			fmt.Sprintf("Access denied for user '%s'@'%s' (using password: YES)", user, branch))
 	}

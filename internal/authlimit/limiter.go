@@ -14,10 +14,12 @@ import (
 	"time"
 )
 
-// Limiter は接続元アドレスごとの連続失敗回数を持つ。
+// Limiter は接続元アドレスごとの連続失敗回数と同時試行数を持つ。
 type Limiter struct {
 	mu        sync.Mutex
 	fails     map[string]entry
+	inflight  map[string]int
+	maxInFly  int           // 接続元ごとの同時認証試行の上限
 	threshold int           // この回数までは遅延なし
 	base      time.Duration // threshold 超過 1 回目の遅延
 	max       time.Duration // 遅延の上限
@@ -35,6 +37,8 @@ type entry struct {
 func New() *Limiter {
 	return &Limiter{
 		fails:     map[string]entry{},
+		inflight:  map[string]int{},
+		maxInFly:  8,
 		threshold: 5,
 		base:      time.Second,
 		max:       8 * time.Second,
@@ -56,7 +60,53 @@ func Key(addr net.Addr) string {
 	return host
 }
 
-// Fail は失敗を記録し、この失敗応答の前に置くべき遅延を返す。
+// Acquire は接続元の認証試行スロットを取る。同時試行が上限を超えていれば
+// false(呼び出し側は検証せず即拒否する)。並列化で backoff を迂回されない
+// ようにし、待機中の接続を大量に抱える DoS も抑える(#310 review)。
+// true のときは必ず Release すること。
+func (l *Limiter) Acquire(key string) bool {
+	if key == "" {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.inflight[key] >= l.maxInFly {
+		return false
+	}
+	l.inflight[key]++
+	return true
+}
+
+// Release は Acquire で取ったスロットを返す。
+func (l *Limiter) Release(key string) {
+	if key == "" {
+		return
+	}
+	l.mu.Lock()
+	if l.inflight[key] <= 1 {
+		delete(l.inflight, key)
+	} else {
+		l.inflight[key]--
+	}
+	l.mu.Unlock()
+}
+
+// Penalty はこれまでの失敗に応じて、検証の**前**に置く遅延を返す(記録は変えない)。
+// 検証後に遅らせるだけだと、並列に接続すれば検証自体は無制限に進む。
+func (l *Limiter) Penalty(key string) time.Duration {
+	if key == "" {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.fails[key]
+	if !ok || l.now().Sub(e.last) > l.window {
+		return 0
+	}
+	return l.delayFor(e.count)
+}
+
+// Fail は失敗を記録し、次の試行に掛かる遅延を返す。
 func (l *Limiter) Fail(key string) time.Duration {
 	if key == "" {
 		return 0
@@ -72,7 +122,12 @@ func (l *Limiter) Fail(key string) time.Duration {
 	e.last = now
 	l.fails[key] = e
 	l.sweepLocked(now)
-	over := e.count - l.threshold
+	return l.delayFor(e.count)
+}
+
+// delayFor は連続失敗 count 回に対する遅延。閾値までは 0、以降 base, 2base, … max。
+func (l *Limiter) delayFor(count int) time.Duration {
+	over := count - l.threshold
 	if over <= 0 {
 		return 0
 	}

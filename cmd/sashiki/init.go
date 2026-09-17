@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/template"
 )
 
@@ -286,6 +287,7 @@ func initSteps(opts initOpts) []initStep {
 				return writeConfigFile("/etc/sashiki/config.yaml", cfg)
 			},
 		},
+		configPermStep("/etc/sashiki/config.yaml"),
 	)
 	return steps
 }
@@ -304,28 +306,93 @@ func renderConfigApp(pool, appPass string) ([]byte, error) {
 	if err := t.Execute(&buf, struct {
 		Pool    string
 		AppPass string
-	}{Pool: pool, AppPass: appPass}); err != nil {
+	}{Pool: pool, AppPass: yamlQuote(appPass)}); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
 }
 
-// writeConfigFile は app_pass を含む config を書く。other には読ませない(#295)が、
-// sashikid は User=sashiki で動くので group を sashiki に揃える。sashiki グループが
-// 無い環境(ソースから入れて root 直起動)では従来どおり 0644 に落とす。
+// writeConfigFile は app_pass を含む config を書き、権限を揃える(#295)。
 func writeConfigFile(path string, data []byte) error {
-	if err := os.WriteFile(path, data, 0o640); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return err
 	}
+	return fixConfigPerm(path)
+}
+
+// configPerm は config に付けたい権限。sashikid は User=sashiki で動くので
+// root:sashiki 0640。sashiki グループが無い環境(ソースから入れて root 直起動)
+// では root:root 0600 — other に読ませる理由は無い(#310 review)。
+func configPerm() (mode os.FileMode, gid int) {
 	g, err := user.LookupGroup("sashiki")
 	if err != nil {
-		return os.Chmod(path, 0o644)
+		return 0o600, 0
 	}
-	gid, err := strconv.Atoi(g.Gid)
+	n, err := strconv.Atoi(g.Gid)
 	if err != nil {
-		return os.Chmod(path, 0o644)
+		return 0o600, 0
 	}
-	return os.Chown(path, 0, gid)
+	return 0o640, n
+}
+
+// configPermOK は path が configPerm の状態か。
+func configPermOK(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	mode, gid := configPerm()
+	if st.Mode().Perm() != mode {
+		return false
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		return true
+	}
+	return int(sys.Uid) == 0 && int(sys.Gid) == gid
+}
+
+// fixConfigPerm は既存 config の内容には触れず権限だけ揃える。init を再実行した
+// 既存環境(生成ステップは「済み」でスキップされる)にも #295 を効かせるため。
+func fixConfigPerm(path string) error {
+	mode, gid := configPerm()
+	if err := os.Chown(path, 0, gid); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
+}
+
+// configPermStep は既存 config の権限を揃える冪等ステップ。
+func configPermStep(path string) initStep {
+	return initStep{
+		name: path + " の権限 (root:sashiki 0640 / 無ければ 0600)",
+		done: func() bool { return configPermOK(path) },
+		run:  func() error { return fixConfigPerm(path) },
+	}
+}
+
+// yamlQuote は文字列を YAML の二重引用符リテラルにする。--app-pass に `: ` や
+// ` #` や引用符が入っても生成 config が壊れず、読まれる値が表示と一致する
+// (#310 review)。
+func yamlQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // randomPassword は app_pass 用の乱数(hex 32 文字)を返す。YAML でクォート不要な

@@ -121,6 +121,7 @@ func initStepsPostgres(opts initOpts) []initStep {
 				return writeConfigFile("/etc/sashiki/config.yaml", cfg)
 			},
 		},
+		configPermStep("/etc/sashiki/config.yaml"),
 	)
 	return steps
 }
@@ -147,7 +148,7 @@ func renderPostgresConfigApp(pool, appPass string) ([]byte, error) {
 		Pool     string
 		PgBinDir string
 		AppPass  string
-	}{Pool: pool, PgBinDir: binDir, AppPass: appPass}); err != nil {
+	}{Pool: pool, PgBinDir: binDir, AppPass: yamlQuote(appPass)}); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

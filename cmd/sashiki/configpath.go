@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,21 +14,41 @@ import (
 // ~/Library/Application Support/sashiki[-pg]/config.yaml に書くので、そこに
 // あればそれを使う。README の手順(baseline import / token)を Mac で --config
 // 無しに通すため。SASHIKI_CONFIG があれば何より優先する。
+//
+// MySQL 版と Postgres 版の両方があるときは黙ってどちらかを選ばず、空文字を返す
+// (呼び出し側は requireConfigPath で --config / SASHIKI_CONFIG を促す、#310 review)。
 func defaultConfigPath() string {
 	if p := os.Getenv("SASHIKI_CONFIG"); p != "" {
 		return p
 	}
 	if runtime.GOOS == "darwin" {
 		if home, err := os.UserHomeDir(); err == nil {
+			var found []string
 			for _, dir := range []string{"sashiki", "sashiki-pg"} {
 				p := filepath.Join(home, "Library", "Application Support", dir, "config.yaml")
 				if _, err := os.Stat(p); err == nil {
-					return p
+					found = append(found, p)
 				}
+			}
+			switch len(found) {
+			case 1:
+				return found[0]
+			case 2:
+				return ""
 			}
 		}
 	}
 	return "/etc/sashiki/config.yaml"
+}
+
+// requireConfigPath は defaultConfigPath が決められなかった(複数候補)ときに
+// 分かるエラーを返す。
+func requireConfigPath(p string) (string, error) {
+	if p != "" {
+		return p, nil
+	}
+	return "", fmt.Errorf("config が複数あります(~/Library/Application Support/sashiki と sashiki-pg)。" +
+		"--config <path> か SASHIKI_CONFIG で指定してください")
 }
 
 // localBaselineTag は apfs / reflink の import で使う snapshot tag を返す(#293)。

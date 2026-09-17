@@ -242,7 +242,12 @@ func cmdBaselineImport(args []string) int {
 			return exitError
 		}
 	}
-	cfg, err := config.Load(opts.configPath)
+	cfgPath, err := requireConfigPath(opts.configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sashiki baseline import: config: %v\n", err)
 		return exitError
@@ -547,9 +552,7 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	}
 	fmt.Printf("→ 接続ユーザー %s 作成\n", cfg.Engine.Mysql.ProxyUser)
 	plugin := authPluginFor(mysqlBin, sock)
-	createUser := fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH %s BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
-		cfg.Engine.Mysql.ProxyUser, plugin, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
+	createUser := createAppUserSQL(cfg.Engine.Mysql.ProxyUser, plugin, cfg.Engine.Mysql.ProxyPass)
 	if out, err := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e", createUser).CombinedOutput(); err != nil {
 		return fmt.Errorf("create user: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -704,9 +707,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	// proxy は client 認証を自前検証し、backend へは選んだプラグインで接続し直す
 	// (caching_sha2 の平文 TCP cold cache は RSA full-auth、native は AuthSwitch)。
 	plugin := authPluginFor(mysqlBin, sock)
-	createUser := fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH %s BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
-		cfg.Engine.Mysql.ProxyUser, plugin, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
+	createUser := createAppUserSQL(cfg.Engine.Mysql.ProxyUser, plugin, cfg.Engine.Mysql.ProxyPass)
 	userCmd := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e", createUser)
 	if out, err := userCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("create user: %w: %s", err, strings.TrimSpace(string(out)))
@@ -755,6 +756,21 @@ func mysqlClientBin(mysqldBin, name string) string {
 // registerImportedBaseline は import した baseline を state.db に current として
 // 登録する(仕様 12-1)。import 本体は成功しているので登録失敗は致命ではないが、
 // 黙って握りつぶすと baseline list / GC の台帳から漏れるため warning を出す(#150)。
+// createAppUserSQL は app ユーザーを作る SQL。ユーザー名とパスワードは
+// MySQL の文字列リテラルとしてエスケープする(引用符や \ を含む --app-pass で
+// 壊れない、#310 review)。plugin は authPluginFor が返す固定候補なのでそのまま。
+func createAppUserSQL(userName, plugin, pass string) string {
+	return fmt.Sprintf(
+		"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH %s BY %s; GRANT ALL PRIVILEGES ON *.* TO %s@'%%'; FLUSH PRIVILEGES;",
+		mysqlLiteral(userName), plugin, mysqlLiteral(pass), mysqlLiteral(userName))
+}
+
+// mysqlLiteral は s を MySQL の単一引用符リテラルにする。
+func mysqlLiteral(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `'`, `\'`, "\x00", `\0`, "\n", `\n`, "\r", `\r`)
+	return "'" + r.Replace(s) + "'"
+}
+
 func registerImportedBaseline(stateDB, snap, dataAsOf string) {
 	db, err := state.Open(stateDB)
 	if err != nil {

@@ -13,7 +13,9 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -206,7 +208,10 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 監査: app 資格情報で任意 SQL を流せる経路なので、誰が何を流したか残す(#294)。
-	log.Printf("api: query branch=%s by=%s sql=%q", name, callerOf(r).Name, truncateForLog(req.SQL, 200))
+	// 本文はログに書かない(INSERT/UPDATE のリテラルに秘密や個人情報が入る、
+	// #310 review)。種別・長さ・digest で照合できる形にする。
+	log.Printf("api: query branch=%s by=%s kind=%s bytes=%d sha256=%s",
+		name, callerOf(r).Name, sqlKind(req.SQL), len(req.SQL), sqlDigest(req.SQL))
 	db, err := s.openDB(r.Context(), name)
 	if err != nil {
 		s.writeError(w, err)
@@ -290,10 +295,21 @@ func (s *Server) schemaQuery() string {
 	return mysqlSchemaQuery
 }
 
-// truncateForLog はログ用に文字列を n 文字で切る。
-func truncateForLog(v string, n int) string {
-	if len(v) <= n {
-		return v
+// sqlKind は文の先頭キーワード(SELECT / INSERT / …)を返す。リテラルは含まない。
+func sqlKind(sql string) string {
+	f := strings.Fields(strings.TrimLeft(sql, " \t\r\n("))
+	if len(f) == 0 {
+		return "?"
 	}
-	return v[:n] + "…"
+	k := strings.ToUpper(f[0])
+	if len(k) > 16 {
+		k = k[:16]
+	}
+	return k
+}
+
+// sqlDigest は本文の sha256 先頭 12 桁。同じ文の再発を突き合わせる用。
+func sqlDigest(sql string) string {
+	sum := sha256.Sum256([]byte(sql))
+	return hex.EncodeToString(sum[:])[:12]
 }

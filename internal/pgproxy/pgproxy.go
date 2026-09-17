@@ -179,10 +179,19 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	}
 
 	// 認証終端: app パスワードで検証する。ここを通るまで branch に触れない。
+	// 総当たり対策(#297): 同一接続元の同時試行を絞り、失敗が続いていれば
+	// 検証の前に待たせる(検証後に遅らせるだけだと並列接続で迂回できる)。
 	src := authlimit.Key(client.RemoteAddr())
+	if !s.limiter.Acquire(src) {
+		return fatal(client, "53300", "too many concurrent authentication attempts")
+	}
+	defer s.limiter.Release(src)
+	authlimit.Sleep(ctx, s.limiter.Penalty(src))
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err := s.verifyClientSCRAM(client); err != nil {
-		// 失敗が続く接続元には応答を遅らせる(総当たり対策、#297)。
-		authlimit.Sleep(ctx, s.limiter.Fail(src))
+		s.limiter.Fail(src)
 		return fatal(client, "28P01", fmt.Sprintf("password authentication failed for user %q", rawUser))
 	}
 	s.limiter.Reset(src)

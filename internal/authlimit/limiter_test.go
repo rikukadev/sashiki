@@ -68,3 +68,43 @@ func TestKey(t *testing.T) {
 		t.Errorf("Key(nil) = %q", k)
 	}
 }
+
+// 検証の前に掛かる遅延(Penalty)は失敗履歴に応じて増え、記録は変えない。
+func TestPenaltyReflectsPastFailuresWithoutRecording(t *testing.T) {
+	l, _ := newTest()
+	if d := l.Penalty("10.0.0.1"); d != 0 {
+		t.Fatalf("fresh source should have no penalty, got %v", d)
+	}
+	for i := 0; i < 6; i++ {
+		l.Fail("10.0.0.1")
+	}
+	if d := l.Penalty("10.0.0.1"); d != time.Second {
+		t.Errorf("penalty after 6 failures = %v, want 1s", d)
+	}
+	if d := l.Penalty("10.0.0.1"); d != time.Second {
+		t.Errorf("Penalty must not advance the streak, got %v", d)
+	}
+}
+
+// 同時試行は接続元ごとに上限があり、Release で戻る。
+func TestAcquireCapsConcurrentAttempts(t *testing.T) {
+	l, _ := newTest()
+	for i := 0; i < l.maxInFly; i++ {
+		if !l.Acquire("10.0.0.1") {
+			t.Fatalf("attempt %d should be admitted", i+1)
+		}
+	}
+	if l.Acquire("10.0.0.1") {
+		t.Error("attempt over the cap must be refused")
+	}
+	if !l.Acquire("10.0.0.2") {
+		t.Error("another source is independent")
+	}
+	l.Release("10.0.0.1")
+	if !l.Acquire("10.0.0.1") {
+		t.Error("slot should be free after Release")
+	}
+	if !l.Acquire("") {
+		t.Error("empty key never limits")
+	}
+}

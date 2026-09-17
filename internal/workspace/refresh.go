@@ -295,6 +295,9 @@ func (m *Manager) ValidateBaseline(ctx context.Context, snapshot string) error {
 // on-baseline-validate hook で検証してから破棄する(仕様 12-4)。
 // crash recovery が走らずに起動できること自体が「正常終了状態で撮られた」検証を兼ねる。
 func (m *Manager) validateCandidate(ctx context.Context, snap storage.SnapshotRef, rc RefreshConfig) error {
+	// 共有名 _validate を使うので同時実行を許さない(#310 review)。
+	m.validateMu.Lock()
+	defer m.validateMu.Unlock()
 	name := "_validate"
 	// 既存の検証 volume が残っていれば掃除
 	if vol, err := m.resolveVolume(ctx, state.Branch{Name: name}); err == nil {

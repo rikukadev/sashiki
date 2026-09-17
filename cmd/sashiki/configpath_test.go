@@ -3,7 +3,10 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/rikukadev/sashiki/internal/config"
 )
 
 // 既存 baseline があれば失敗せず新しい tag で取り直す(#293)。
@@ -47,5 +50,37 @@ func TestDefaultConfigPathEnvOverride(t *testing.T) {
 	t.Setenv("SASHIKI_CONFIG", "/tmp/x.yaml")
 	if got := defaultConfigPath(); got != "/tmp/x.yaml" {
 		t.Errorf("defaultConfigPath = %q", got)
+	}
+}
+
+// --app-pass に YAML を壊す文字が入っても、読み戻した値が一致する(#310 review)。
+func TestRenderConfigQuotesAppPass(t *testing.T) {
+	for _, pass := range []string{`foo: bar`, `foo # bar`, `say "hi"`, `back\slash`, "plain"} {
+		data, err := renderConfigApp("pool", pass)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := filepath.Join(t.TempDir(), "c.yaml")
+		if err := os.WriteFile(f, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Load(f)
+		if err != nil {
+			t.Fatalf("config with app_pass %q must stay loadable: %v", pass, err)
+		}
+		if got := cfg.AppPass(); got != pass {
+			t.Errorf("app_pass round-trip: got %q, want %q", got, pass)
+		}
+	}
+}
+
+// 引用符やバックスラッシュを含むパスワードでも SQL が壊れない。
+func TestCreateAppUserSQLEscapes(t *testing.T) {
+	sql := createAppUserSQL("dev", "caching_sha2_password", `it's \ "x"`)
+	if !strings.Contains(sql, `BY 'it\'s \\ "x"'`) {
+		t.Errorf("password not escaped: %s", sql)
+	}
+	if !strings.Contains(sql, `CREATE USER IF NOT EXISTS 'dev'@'%'`) {
+		t.Errorf("user not quoted: %s", sql)
 	}
 }

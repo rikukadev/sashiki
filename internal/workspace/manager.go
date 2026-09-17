@@ -174,6 +174,10 @@ type Manager struct {
 	baselinePolicy RefreshConfig
 	// baseline の set / GC / publish を直列化する(Fix 3)。
 	baselineMu sync.Mutex
+	// validateMu は validateCandidate を直列化する。promote / refresh / validate は
+	// 共有名 _validate の volume と port を使うので、同時に走ると互いの候補を
+	// 消し合い、別候補の起動を見て validated=true にしてしまう(#310 review)。
+	validateMu sync.Mutex
 }
 
 // SetBaselinePolicy は refresh の publish ポリシーを設定する(sashikid 起動時)。

@@ -21,7 +21,11 @@ func cmdToken(args []string) int {
 		return usageToken()
 	}
 	sub, rest := args[0], args[1:]
-	cfgPath := tokenConfigPath(rest)
+	cfgPath, err := requireConfigPath(tokenConfigPath(rest))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki token:", err)
+		return exitError
+	}
 	// state.db が /etc・/var 配下(Linux の systemd 構成)なら root が要る。
 	// macOS ネイティブは自分の Application Support 配下なので不要(#293)。
 	if os.Geteuid() != 0 && strings.HasPrefix(cfgPath, "/etc/") {
