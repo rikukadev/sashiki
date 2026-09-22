@@ -1,6 +1,7 @@
 # 実 AWS の E2E
 
-EC2 を 1 台立てて、利用者と同じ手順で sashiki を入れ、使い終わったら捨てる。
+EC2 を立てて利用者と同じ手順で sashiki を入れたあと、data EBSを別のEC2へ
+付け替えてcompute replacementも検証し、使い終わったらすべて捨てる。
 
 ```bash
 goreleaser release --snapshot --clean --skip=publish,sign,announce
@@ -19,6 +20,9 @@ AWS_REGION=ap-northeast-1 E2E_ARTIFACT_BUCKET=sashiki-e2e-artifacts-apne1-<accou
 - **deb 経由の導入。** `sashikid.service` / `sashiki` ユーザー /
   `/var/lib`・`/var/log` の用意はパッケージの仕事で、バイナリを直接置くと
   まるごと検証されない
+- **compute replacement後の台帳とデータ。** data EBSだけを新しいEC2へ付け替え、
+  `show` / proxy接続 / `reset`が既存branchに対して成功することを見る。datasetだけ
+  残って`state.db`が消える退行はここで検出する
 - **Action の `transport=ssm` が端から端まで。**
   [`e2e/action-ssm.sh`](../action-ssm.sh) は偽の `aws` で「送る形」しか見ない。
   実際に SSM が届いてインスタンス上の CLI が動いて出力が返ることは、
@@ -50,7 +54,7 @@ aws ec2 describe-instances \
 
 | | 何 | 用途 |
 |---|---|---|
-| ロール | `sashiki-e2e-github-actions` | CI が OIDC で引き受ける。EC2 の起動 / 破棄・SSM・成果物バケット |
+| ロール | `sashiki-e2e-github-actions` | CI が OIDC で引き受ける。EC2の起動/破棄・data EBSの付け替え/削除・SSM・成果物バケット |
 | ロール | `sashiki-e2e-instance`(インスタンスプロファイル) | `AmazonSSMManagedInstanceCore` + 成果物バケットの読み取り |
 | バケット | `sashiki-e2e-artifacts-apne1-<account>`(`ci-policy.json` と同名) | deb と `provision.sh` の受け渡し。1 日で消える |
 

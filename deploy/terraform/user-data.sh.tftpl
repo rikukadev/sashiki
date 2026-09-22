@@ -72,8 +72,16 @@ if [ -z "$DATA_DEVICE" ]; then
   exit 1
 fi
 
-# --- init: zpool 作成・mysql セットアップ・config 生成・sashikid 有効化まで(--yes で非対話) ---
+# --- init: zpool 作成・mysql セットアップ・config 生成まで(--yes で非対話) ---
 sashiki init --yes --pool "$POOL" --device "$DATA_DEVICE"
+
+# state.db(port/origin/operation/token 等の台帳)を root volume に置くと EC2
+# 差し替えで失われる。データ EBS 上の専用 dataset へ置き、既存 pool の import
+# 時にも同じ台帳を使う。SSM Association の既存環境移行と同じ冪等スクリプト。
+install -m 0755 /dev/stdin /usr/local/sbin/sashiki-persist-state <<'SASHIKI_PERSIST_STATE'
+${persist_state_script}
+SASHIKI_PERSIST_STATE
+SASHIKI_POOL="$POOL" /usr/local/sbin/sashiki-persist-state
 
 # init が生成した config の app credential を Secrets Manager の値へ差し替える(#165: 平文回避)。
 set +x

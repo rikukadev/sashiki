@@ -846,7 +846,17 @@ module "db" {
 }
 ```
 
-sashiki が作る AWS リソース: EC2、EBS(`prevent_destroy`)、SG、IAM ロール(ebs-zfs なら SSM 読み取りのみ)、Secrets Manager(app_user の PW)、SSM(API トークン)。`route53_zone_id` と `dns_name` を両方指定したときだけ Route53 A レコードも作る。**RDS / Aurora には触らない。** ebs-zfs の日常運用で sashikid は AWS API を呼ばない。
+sashiki が作る AWS リソース: EC2、EBS(`prevent_destroy`)、SG、IAM ロール
+(Secrets/Parameter Storeの読取 + SSM Managed Instance)、Secrets Manager(app_user のPW)、
+SSM Parameter Store(APIトークン)、SSM Association(bootstrap完了待ち)。
+`route53_zone_id` と `dns_name` を両方指定したときだけ Route53 A レコードも作る。
+**RDS / Aurora には触らない。** ebs-zfsの日常運用でsashikidはAWS APIを呼ばない。
+
+data EBSにはbranch / baselineに加えて`state.db`専用datasetを置く。EC2を置換したときは
+既存zpoolをimportし、port / origin / operation / tokenを含む同じ台帳を再利用する。
+Terraformのapply完了条件はEC2 API上のrunningではなく、SSM Associationによる
+cloud-init完了と`/v1/healthz`成功とする。旧版からの初回移行だけは、置換なしのapplyで
+root volume上のstate.dbをdata EBSへ移してから、次のapplyでEC2を置換する。
 
 DNS は「VPC 内から解決できて sashiki ホストに向く」なら何でもよい。Route53 を指定しない場合、Terraform の `endpoint` は EC2 の private IP を返す。
 
@@ -943,7 +953,7 @@ Storage ──────── Workspace / Branch Manager ──────�
 |**v0.2**|idle stop / wake、TTL / lease、profile、GitHub Action、プレビュー環境連携(port 渡し)                                                                                                                                                             |30 分放置で sleeping、`wake` で復帰。PR open/close で create/delete。7 日で自動削除                                                                                          |
 |**v0.3**|baseline automation(merge / nightly トリガー、mask validation)、Terraform モジュール、observability、sashiki-root-helper、AppArmor プロファイル生成                                                                                                     |`terraform apply` だけで sashikid が動く。夜間 refresh が回る。sudoers が zfs 全体を許可していない                                                                                  |
 |**v0.4**|proxy 方式 A(認証終端)への移行、username routing、認証後 lazy create、Web UI 拡充                                                                                                                                                                   |`mysql -udev@pr-2 -h <host>` で存在しない branch が(認証後に)生えて繋がる                                                                                                    |
-|**v1.x**|fsx-zfs、multi-host、replaceable compute、local-zfs profile、Postgres、team quota                                                                                                                                                      |backend を切り替えてもコアと CLI が変わらない                                                                                                                               |
+|**v1.x**|fsx-zfs、multi-host、local-zfs profile、Postgres、team quota                                                                                                                                                                            |backend を切り替えてもコアと CLI が変わらない                                                                                                                               |
 
 > 注: 実装は歴史的経緯により一部を前倒し済み(proxy 中継・lazy create・fsx・postgres は搭載済み)。
 > 本表は「機能の完成度をどの順で仕様水準に引き上げるか」の指針として読む。進捗は issue #48 参照。

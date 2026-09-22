@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 実 AWS の E2E。EC2 を 1 台立てて、利用者と同じ手順で sashiki を入れ、
-# 使い終わったら必ず捨てる。
+# 実 AWS の E2E。EC2 を立てて利用者と同じ手順で sashiki を入れたあと、
+# data EBS を新しい EC2 へ付け替えて compute replacement まで確認する。
 #
 #   ./e2e/aws/run.sh <sashiki.deb> <タグ>
 #
@@ -30,13 +30,23 @@ fail() { echo "AWS E2E FAILED: $*" >&2; exit 1; }
 log() { echo; echo "=== $* ==="; }
 
 IID=""
+OLD_IID=""
+DATA_VOLUME_ID=""
 cleanup() {
   local rc=$?
   log "cleanup (exit=$rc)"
-  if [ -n "$IID" ]; then
-    echo "  terminating $IID"
-    aws ec2 terminate-instances --region "$REGION" --instance-ids "$IID" > /dev/null 2>&1 \
-      || echo "  terminate に失敗。手で確認すること: $IID" >&2
+  for cleanup_iid in "$IID" "$OLD_IID"; do
+    if [ -n "$cleanup_iid" ]; then
+      echo "  terminating $cleanup_iid"
+      aws ec2 terminate-instances --region "$REGION" --instance-ids "$cleanup_iid" > /dev/null 2>&1 \
+        || echo "  terminate に失敗。手で確認すること: $cleanup_iid" >&2
+    fi
+  done
+  if [ -n "$DATA_VOLUME_ID" ]; then
+    echo "  deleting $DATA_VOLUME_ID"
+    aws ec2 wait volume-available --region "$REGION" --volume-ids "$DATA_VOLUME_ID" 2>/dev/null || true
+    aws ec2 delete-volume --region "$REGION" --volume-id "$DATA_VOLUME_ID" > /dev/null 2>&1 \
+      || echo "  volume削除に失敗。手で確認すること: $DATA_VOLUME_ID" >&2
   fi
   aws s3 rm "$PREFIX" --recursive > /dev/null 2>&1 || true
   exit "$rc"
@@ -67,10 +77,48 @@ json.dump({"commands": [os.environ["SCRIPT"]]}, open(os.environ["PARAMS"], "w"))
   fi
 }
 
+wait_for_ready() {
+  local state=None out=""
+  log "wait for SSM ($IID)"
+  for _ in $(seq 1 60); do
+    state=$(aws ssm describe-instance-information --region "$REGION" \
+      --filters "Key=InstanceIds,Values=$IID" \
+      --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || echo None)
+    [ "$state" = "Online" ] && break
+    sleep 10
+  done
+  [ "$state" = "Online" ] || fail "SSM が Online にならない(インスタンスプロファイル / 経路を確認)"
+  echo "  online"
+
+  log "wait for provisioning ($IID)"
+  for _ in $(seq 1 90); do
+    out=$(ssm 'if [ -f /var/tmp/sashiki-e2e-failed ]; then echo "FAILED: $(cat /var/tmp/sashiki-e2e-failed)";
+               elif [ -f /var/tmp/sashiki-e2e-ready ]; then echo READY; else echo WAIT; fi' 2>/dev/null || echo WAIT)
+    case "$out" in
+      READY*) break ;;
+      FAILED*)
+        echo "$out" >&2
+        ssm 'tail -40 /var/log/sashiki-e2e-provision.log' >&2 || true
+        fail "provision が失敗した"
+        ;;
+    esac
+    sleep 10
+  done
+  grep -q READY <<<"${out:-}" || {
+    ssm 'echo "--- provision.log ---"; tail -40 /var/log/sashiki-e2e-provision.log 2>/dev/null || echo "(無い = user-data が走る前に失敗)"
+         echo "--- cloud-init ---"; tail -20 /var/log/cloud-init-output.log 2>/dev/null' >&2 || true
+    fail "provision が終わらない"
+  }
+  ssm 'curl -fsS http://127.0.0.1:8080/v1/healthz >/dev/null' \
+    || fail "provision完了直後にhealth endpointが応答しない"
+  echo "  provisioned and healthy"
+}
+
 log "upload artifacts"
 [ -f "$DEB" ] || fail "deb が無い: $DEB"
 aws s3 cp "$DEB" "$PREFIX/sashiki.deb" > /dev/null
 aws s3 cp "$SCRIPT_DIR/provision.sh" "$PREFIX/provision.sh" > /dev/null
+aws s3 cp "$SCRIPT_DIR/../../deploy/terraform/persist-state.sh" "$PREFIX/persist-state.sh" > /dev/null
 # 署名付き URL で渡す。Ubuntu の素のイメージに **AWS CLI は入っていない**ので、
 # user-data で aws s3 cp を呼ぶと cloud-init が "aws: command not found" で
 # 落ちる(しかも user-data の失敗は静かで、SSM は Online になるため
@@ -85,6 +133,7 @@ BUCKET_REGION=$(aws s3api get-bucket-location --bucket "$BUCKET" --query Locatio
 [ "$BUCKET_REGION" = "None" ] && BUCKET_REGION=us-east-1
 DEB_URL=$(aws s3 presign "$PREFIX/sashiki.deb" --region "$BUCKET_REGION" --expires-in 3600)
 PROVISION_URL=$(aws s3 presign "$PREFIX/provision.sh" --region "$BUCKET_REGION" --expires-in 3600)
+PERSIST_STATE_URL=$(aws s3 presign "$PREFIX/persist-state.sh" --region "$BUCKET_REGION" --expires-in 3600)
 echo "  $PREFIX (region $BUCKET_REGION)"
 
 log "launch ec2"
@@ -103,6 +152,7 @@ USERDATA=$(cat <<EOF
 set -eux
 curl -fsSL "$DEB_URL" -o /var/tmp/sashiki.deb
 curl -fsSL "$PROVISION_URL" -o /var/tmp/provision.sh
+curl -fsSL "$PERSIST_STATE_URL" -o /var/tmp/persist-state.sh
 # 取れたものが本当にスクリプトか確かめる。S3 がエラー XML を返しても
 # curl -f が拾えない場合があり、そのまま実行すると原因の遠い構文エラーになる。
 head -1 /var/tmp/provision.sh | grep -q '^#!' || {
@@ -111,7 +161,7 @@ head -1 /var/tmp/provision.sh | grep -q '^#!' || {
   echo "S3 のエラー応答ではないか(署名リージョンを確認)" > /var/tmp/sashiki-e2e-failed
   exit 1
 }
-chmod +x /var/tmp/provision.sh
+chmod +x /var/tmp/provision.sh /var/tmp/persist-state.sh
 /var/tmp/provision.sh
 EOF
 )
@@ -122,47 +172,21 @@ IID=$(aws ec2 run-instances --region "$REGION" \
   --metadata-options "HttpTokens=required,HttpEndpoint=enabled" \
   --block-device-mappings \
     'DeviceName=/dev/sda1,Ebs={VolumeSize=20,VolumeType=gp3,DeleteOnTermination=true}' \
-    'DeviceName=/dev/sdb,Ebs={VolumeSize=20,VolumeType=gp3,DeleteOnTermination=true}' \
+    'DeviceName=/dev/sdb,Ebs={VolumeSize=20,VolumeType=gp3,DeleteOnTermination=false}' \
   --user-data "$USERDATA" \
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$TAG},{Key=sashiki-e2e,Value=true}]" \
+  --tag-specifications \
+    "ResourceType=instance,Tags=[{Key=Name,Value=$TAG},{Key=sashiki-e2e,Value=true}]" \
+    "ResourceType=volume,Tags=[{Key=Name,Value=$TAG},{Key=sashiki-e2e,Value=true}]" \
   --query 'Instances[0].InstanceId' --output text) || fail "run-instances が失敗した"
 echo "  $IID ($TYPE, $SUBNET)"
 
-log "wait for SSM"
-for _ in $(seq 1 60); do
-  state=$(aws ssm describe-instance-information --region "$REGION" \
-    --filters "Key=InstanceIds,Values=$IID" \
-    --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || echo None)
-  [ "$state" = "Online" ] && break
-  sleep 10
-done
-[ "$state" = "Online" ] || fail "SSM が Online にならない(インスタンスプロファイル / 経路を確認)"
-echo "  online"
+DATA_VOLUME_ID=$(aws ec2 describe-volumes --region "$REGION" \
+  --filters "Name=attachment.instance-id,Values=$IID" "Name=attachment.device,Values=/dev/sdb" \
+  --query 'Volumes[0].VolumeId' --output text)
+[ "$DATA_VOLUME_ID" != "None" ] || fail "data volumeを特定できない"
+echo "  data volume: $DATA_VOLUME_ID"
 
-# user-data が provision.sh を流し終えるのを待つ。apt と init で数分かかる。
-log "wait for provisioning"
-for _ in $(seq 1 90); do
-  out=$(ssm 'if [ -f /var/tmp/sashiki-e2e-failed ]; then echo "FAILED: $(cat /var/tmp/sashiki-e2e-failed)";
-             elif [ -f /var/tmp/sashiki-e2e-ready ]; then echo READY; else echo WAIT; fi' 2>/dev/null || echo WAIT)
-  case "$out" in
-    READY*) break ;;
-    FAILED*)
-      echo "$out" >&2
-      ssm 'tail -40 /var/log/sashiki-e2e-provision.log' >&2 || true
-      fail "provision が失敗した"
-      ;;
-  esac
-  sleep 10
-done
-grep -q READY <<<"${out:-}" || {
-  # user-data が起動前に落ちていると provision.log すら存在しない。SSM は
-  # Online になるので「起動はしたのに何も始まらない」に見える。cloud-init の
-  # 出力まで出しておかないと、ここで詰まったとき手掛かりがゼロになる。
-  ssm 'echo "--- provision.log ---"; tail -40 /var/log/sashiki-e2e-provision.log 2>/dev/null || echo "(無い = user-data が走る前に失敗)"
-       echo "--- cloud-init ---"; tail -20 /var/log/cloud-init-output.log 2>/dev/null' >&2 || true
-  fail "provision が終わらない"
-}
-echo "  provisioned"
+wait_for_ready
 
 # Terraform の api_url は「SG 内から Bearer で叩く」経路(#286)。loopback から
 # 叩くだけの検証では、sashikid が 127.0.0.1 にしか bind していなくても通って
@@ -225,6 +249,57 @@ AWS_REGION="$REGION" \
 ssm 'sashiki show pr-action > /dev/null 2>&1 && echo LEFT || echo GONE' | grep -q GONE \
   || fail "action の delete でブランチが消えていない"
 echo "  create → 接続情報 → delete まで通った"
+
+log "compute replacement: data EBSを新しいEC2へ付け替える"
+ssm '
+set -eu
+sashiki drain
+systemctl stop sashikid
+zpool export dbpool
+' || fail "置換前のdrain / zpool exportに失敗した"
+
+OLD_IID=$IID
+aws ec2 terminate-instances --region "$REGION" --instance-ids "$OLD_IID" >/dev/null \
+  || fail "旧EC2をterminateできない"
+aws ec2 wait instance-terminated --region "$REGION" --instance-ids "$OLD_IID" \
+  || fail "旧EC2のterminateが完了しない"
+aws ec2 wait volume-available --region "$REGION" --volume-ids "$DATA_VOLUME_ID" \
+  || fail "data volumeがavailableにならない"
+
+IID=$(aws ec2 run-instances --region "$REGION" \
+  --image-id "$AMI" --instance-type "$TYPE" --subnet-id "$SUBNET" \
+  --iam-instance-profile "Name=$PROFILE" \
+  --metadata-options "HttpTokens=required,HttpEndpoint=enabled" \
+  --block-device-mappings \
+    'DeviceName=/dev/sda1,Ebs={VolumeSize=20,VolumeType=gp3,DeleteOnTermination=true}' \
+  --user-data "$USERDATA" \
+  --tag-specifications \
+    "ResourceType=instance,Tags=[{Key=Name,Value=$TAG},{Key=sashiki-e2e,Value=true}]" \
+    "ResourceType=volume,Tags=[{Key=Name,Value=$TAG},{Key=sashiki-e2e,Value=true}]" \
+  --query 'Instances[0].InstanceId' --output text) || fail "置換先EC2の起動に失敗した"
+echo "  replacement: $IID"
+
+aws ec2 wait instance-running --region "$REGION" --instance-ids "$IID" \
+  || fail "置換先EC2がrunningにならない"
+aws ec2 attach-volume --region "$REGION" --volume-id "$DATA_VOLUME_ID" \
+  --instance-id "$IID" --device /dev/sdb >/dev/null \
+  || fail "data volumeを置換先へattachできない"
+
+wait_for_ready
+
+log "compute replacement後もshow / proxy / resetが動く"
+out=$(ssm '
+set -eu
+sashiki show pr-1 >/dev/null
+sashiki show pr-2 >/dev/null
+before=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
+sashiki reset pr-1 >/dev/null
+after=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
+echo "before=$before after=$after"
+') || fail "置換後のbranch操作に失敗した"
+echo "  $out"
+grep -q 'before=4 after=3' <<<"$out" \
+  || fail "置換前の書き込み保持またはreset結果が不正: $out"
 
 log "後始末(ブランチと baseline)"
 ssm '
