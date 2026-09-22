@@ -14,8 +14,7 @@ PR プレビュー・CI・開発者 sandbox・マイグレーション検証—�
 
 ```console
 $ sashiki create pr-123
-branch 'pr-123' ready
-$ mysql -udev@pr-123 -h 127.0.0.1 -P3306   # sashiki ホスト上から接続
+branch 'pr-123' ready: mysql -udev@pr-123 -h 127.0.0.1 -P3306
 
 $ sashiki reset  pr-123    # 壊しても数秒で作成時点に戻る
 $ sashiki recreate pr-123  # main が進んだら最新 baseline から作り直す
