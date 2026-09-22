@@ -2,7 +2,7 @@
 
 版を上げるときに**設定やコマンドの挙動が変わる**ものだけを書く。バグ修正の一覧は
 [CHANGELOG.md](../CHANGELOG.md)、機能の説明は [README](../README.md) と
-[docs/REFERENCE.md](REFERENCE.md) を見る。
+[docs/SPEC.md](SPEC.md) を見る。
 
 v0.x の間は API / config が固定されていないので、マイナー版で挙動が変わることがある。
 
@@ -20,8 +20,12 @@ README 監査(#286〜#308)の修正がまとまって入る。**上げる前に 
 - **範囲外の watermark**(`high_watermark` / `critical_watermark` は 0〜1 の比率。`80` は不可)
 - **`proxy.tls_cert` / `proxy.tls_key` の片方だけ**の指定(以前は黙って平文で listen していた)
 
-上げる前に `sashikid --config /etc/sashiki/config.yaml` を手で 1 回起動して確かめるのが速い。
-キーの一覧は [SPEC.md の 21 章](SPEC.md#21-設定ファイル)。
+設定だけを検証するサブコマンドはまだない。稼働中のサービスと並行して
+`sashikid --config /etc/sashiki/config.yaml` を手動起動してはいけない。設定を読んだ後に
+`state.db` を開いて起動時の reconcile まで実行するため、既存デーモンと競合する。
+上げる前に [SPEC.md の 21 章](SPEC.md#21-設定ファイル)と照合し、バイナリ更新後は
+systemd のサービスを 1 つだけ再起動して `systemctl status sashikid` と
+`journalctl -u sashikid` で設定エラーがないことを確認する。
 
 ### 2. API トークンに scope が付く(#294)
 
@@ -72,4 +76,15 @@ systemd 構成でも branch の mysqld が `127.0.0.1` に閉じる(次回の起
 
 user-data が `listen.api` を `0.0.0.0:8080` に書き換えるようになり、出力の `api_url` が
 `allowed_sg_ids` の SG から実際に使える(以前は loopback にしか bind しておらず届かなかった)。
-`terraform apply` でインスタンスを入れ替えたときに反映される。
+新規インスタンスには自動で反映されるが、既存インスタンスでは user-data が再実行されない。
+`/etc/sashiki/config.yaml` の `listen.api` を `0.0.0.0:8080` に変更して sashikid を再起動する。
+
+この変更だけを目的に `terraform apply -replace` でインスタンスを入れ替えてはいけない。
+ブランチデータの EBS は保持される一方、台帳の `state.db` は root volume 上にあり、現状は
+新しいインスタンスへ引き継がれない([#275](https://github.com/rikukadev/sashiki/issues/275))。
+
+### 9. Terraform: `engine_version` 入力を削除(#306)
+
+未使用だった Terraform module の `engine_version` 入力を削除した。module の `source` を
+0.11.0 に上げる前に、呼び出し側の `engine_version = ...` を削除する。残したままだと
+`terraform validate` / `terraform plan` が `Unsupported argument` で失敗する。
