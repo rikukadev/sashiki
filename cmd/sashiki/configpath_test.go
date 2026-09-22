@@ -85,18 +85,24 @@ func TestCreateAppUserSQLEscapes(t *testing.T) {
 	}
 }
 
-// runtimeDir は run_dir を使い、長すぎる/作れない場合は /tmp に落とす(#308)。
-func TestRuntimeDir(t *testing.T) {
-	dir := t.TempDir()
-	cfg := config.Config{RunDir: dir}
-	if got := runtimePath(cfg, "x.sock"); got != filepath.Join(dir, "x.sock") {
-		t.Errorf("runtimePath = %q, want under %q", got, dir)
+// socket / pidfile は /tmp のままで(AppArmor と mysql ユーザーの都合)、
+// 構成ごとに名前が変わる(#308)。
+func TestRuntimePathIsUniquePerConfig(t *testing.T) {
+	a := runtimePath(config.Config{StateDB: "/var/lib/sashiki/state.db"}, "sashiki-baseline.sock")
+	b := runtimePath(config.Config{StateDB: "/tmp/other/state.db"}, "sashiki-baseline.sock")
+	if a == b {
+		t.Errorf("別構成なら別名にする: %s", a)
 	}
-	long := config.Config{RunDir: filepath.Join(dir, strings.Repeat("d", 90))}
-	if got := runtimeDir(long); got != os.TempDir() {
-		t.Errorf("too-long run_dir should fall back to TempDir, got %q", got)
+	if filepath.Clean(filepath.Dir(a)) != filepath.Clean(os.TempDir()) {
+		t.Errorf("置き場は /tmp のまま(AppArmor のパターン): %s", a)
 	}
-	if got := runtimeDir(config.Config{}); got != os.TempDir() {
-		t.Errorf("empty run_dir should fall back to TempDir, got %q", got)
+	for _, p := range []string{a, b} {
+		name := filepath.Base(p)
+		if !strings.HasPrefix(name, "sashiki-") || !strings.HasSuffix(name, ".sock") {
+			t.Errorf("AppArmor の /tmp/sashiki-*.sock* に合わない: %s", name)
+		}
+	}
+	if a != runtimePath(config.Config{StateDB: "/var/lib/sashiki/state.db"}, "sashiki-baseline.sock") {
+		t.Error("同じ構成なら同じ名前(起動と待ち合わせで一致する必要がある)")
 	}
 }

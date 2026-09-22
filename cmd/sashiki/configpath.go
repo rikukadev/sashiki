@@ -1,11 +1,14 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"github.com/rikukadev/sashiki/internal/config"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -63,26 +66,24 @@ func localBaselineTag(snapDir, preferred string) (tag string, replacing bool) {
 	return "baseline-" + time.Now().UTC().Format("20060102T150405Z"), true
 }
 
-// runtimeDir は socket / pidfile / 一時ログの置き場を返す(#308)。
-// 以前は /tmp 固定で、root を分けた複数構成(e2e の temp root と本番)や
-// 並列実行で同じ名前を奪い合っていた。config の run_dir を使い、作れなければ
-// os.TempDir() に落とす。
-func runtimeDir(cfg config.Config) string {
-	dir := cfg.RunDir
-	if dir == "" {
-		dir = os.TempDir()
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return os.TempDir()
-	}
-	// socket のパス長には上限(107 バイト程度)があるので、長すぎるなら /tmp に逃がす。
-	if len(dir) > 80 {
-		return os.TempDir()
-	}
-	return dir
+// runtimePath は baseline import が使う socket / pidfile のパスを返す(#308)。
+//
+// 置き場は /tmp のままにする。branch の mysqld を閉じ込める AppArmor プロファイルが
+// 許しているのは /tmp/sashiki-*.sock* と /tmp/sashiki-*.pid だけで、しかも mysqld は
+// mysql ユーザーに降格して起動するので、root しか書けない /run/sashiki には
+// socket を作れない(そのまま使うと baseline import が「Failed to start mysqld」で落ちる)。
+//
+// 代わりに config(= 構成)ごとに違う名前にして、複数 root や並列実行で同じ名前を
+// 奪い合わないようにする。name は "sashiki-" で始まり .sock / .pid で終わること
+// (AppArmor のパターンに合わせる)。
+func runtimePath(cfg config.Config, name string) string {
+	return uniqueTmpName(name, cfg.StateDB+"|"+cfg.Storage.Local.Root+"|"+cfg.Storage.Zfs.Pool)
 }
 
-// runtimePath は runtimeDir の下のファイル名を返す。
-func runtimePath(cfg config.Config, name string) string {
-	return filepath.Join(runtimeDir(cfg), name)
+// uniqueTmpName は /tmp/<base>-<8 hex><ext> を返す。key が同じなら同じ名前になる。
+func uniqueTmpName(name, key string) string {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	sum := sha256.Sum256([]byte(key))
+	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%s%s", base, hex.EncodeToString(sum[:4]), ext))
 }
