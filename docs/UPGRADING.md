@@ -88,3 +88,15 @@ user-data が `listen.api` を `0.0.0.0:8080` に書き換えるようになり�
 未使用だった Terraform module の `engine_version` 入力を削除した。module の `source` を
 0.11.0 に上げる前に、呼び出し側の `engine_version = ...` を削除する。残したままだと
 `terraform validate` / `terraform plan` が `Unsupported argument` で失敗する。
+
+### 10. CLI の引数・終了コード・`connect` を厳格化(#307 / #308)
+
+CLI を呼ぶスクリプトは次を確認する。
+
+- 未知のフラグと余分な位置引数は、無視せず終了コード **2** で失敗する。
+- `--timeout` / `--interval` は `30s` / `200ms` のように単位まで指定する。不正な値は
+  既定値へ戻さず終了コード **2** で失敗する。
+- operation の待機タイムアウトは終了コード **6** になった。終了コード **5** は容量不足(507)だけに使う。
+- `sashiki connect` は固定パスワード `dev` をコマンドラインへ埋め込まない。
+  `SASHIKI_DB_PASSWORD` を渡すか、mysql / psql の対話入力を使う。Postgres の接続先DBは
+  `SASHIKI_DB_NAME` で指定し、未指定なら `postgres` を使う。
