@@ -26,7 +26,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 | `create <name>` | 作る。`--exist-ok`(既にあれば既存を返す)/ `--profile P` / `--ttl D` / `--port N` / `--baseline <snapshot>` / `--owner O` / `--purpose P` / `--source <json>` |
 | `list` / `show <name>` | 一覧 / 詳細。`show` は `stale`(origin が current baseline より古い)と `baseline:`(promote 元)も出す |
 | `env <name>` | `DB_HOST=` / `DB_PORT=` / `DB_USER=` を出す(dotenv)。`--prefix P` で接頭辞を変える。パスワードと内部ポートは出さない |
-| `connect <name>` | クライアント(`mysql`)を exec する |
+| `connect <name>` | engine に合わせたクライアント(`mysql` / `psql`)を exec する。パスワードは `SASHIKI_DB_PASSWORD`(無ければクライアントが尋ねる)、接続先は API の host(`SASHIKI_DB_HOST` で上書き可) |
 | `reset <name>` | 作成時点(`@init`)に戻す |
 | `recreate <name>` | 現在の current baseline から作り直す |
 | `retry <name>` | `error` のブランチで失敗した操作をやり直す |
@@ -65,7 +65,10 @@ config と state.db を直接触る(sashikid 経由ではない)。
 | `version` | 版を出す |
 
 環境変数: `SASHIKI_API_URL` / `SASHIKI_API_TOKEN`(または `~/.config/sashiki/token`)/
-`SASHIKI_CONFIG`(config の場所を上書き)。
+`SASHIKI_CONFIG`(config の場所を上書き)/ `SASHIKI_DB_HOST` / `SASHIKI_DB_PASSWORD`(`connect` 用)。
+
+未知のフラグ・余分な引数はエラーにする(終了コード 2)。`--timeout` / `--interval` の値が
+読めないときも黙って既定に戻さずエラーにする。
 
 `sashikid` は `--config <path>` だけを取る。
 

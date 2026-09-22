@@ -103,7 +103,11 @@ func cmdBaselinePromote(args []string) int {
 
 // cmdBaselineBuild は build 段階を実行し(既定 --wait)、candidate の snapshot を表示する(#84)。
 func cmdBaselineBuild(args []string) int {
-	_, noWait, timeout, interval := extractWaitFlags(args)
+	_, noWait, timeout, interval, werr := extractWaitFlags(args)
+	if werr != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", werr)
+		return exitUsage
+	}
 	code, data, err := call("POST", "/v1/baseline/build", nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
@@ -118,13 +122,15 @@ func cmdBaselineBuild(args []string) int {
 		Snapshot    string `json:"snapshot"`
 	}
 	_ = json.Unmarshal(data, &b)
-	done, exit := awaitMutation(data, noWait, timeout, interval)
-	if !done {
-		if !noWait {
-			return exit
-		}
+	if noWait {
+		// awaitMutation は --no-wait のとき operation id だけを出す。build は
+		// snapshot 名も要るので、ここで 1 行にまとめて出す(#308: 二重出力だった)。
 		fmt.Printf("baseline build started: %s (operation %s)\n", b.Snapshot, b.OperationID)
 		return exitOK
+	}
+	done, exit := awaitMutation(data, noWait, timeout, interval)
+	if !done {
+		return exit
 	}
 	fmt.Printf("baseline built: %s\n  次: sashiki baseline validate %s / publish %s\n", b.Snapshot, b.Snapshot, b.Snapshot)
 	return exitOK
@@ -132,7 +138,11 @@ func cmdBaselineBuild(args []string) int {
 
 // cmdBaselineStage は validate / publish / delete を実行する(#84)。
 func cmdBaselineStage(args []string, stage string) int {
-	rest, noWait, timeout, interval := extractWaitFlags(args)
+	rest, noWait, timeout, interval, werr := extractWaitFlags(args)
+	if werr != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", werr)
+		return exitUsage
+	}
 	if len(rest) != 1 {
 		fmt.Fprintf(os.Stderr, "usage: sashiki baseline %s <snapshot>\n", stage)
 		return exitUsage
@@ -524,7 +534,7 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	// client は mysqld の隣から解決する(PATH 側の別メジャーを引かない、#149)。
 	mysqlBin := mysqlClientBin(mysqldBin, "mysql")
 	mysqladminBin := mysqlClientBin(mysqldBin, "mysqladmin")
-	sock := "/tmp/sashiki-baseline.sock"
+	sock := runtimePath(cfg, "sashiki-baseline.sock")
 	logErr := filepath.Join(cfg.Storage.Local.Root, "baseline.err")
 
 	fmt.Println("→ mysqld 初期化")
@@ -533,7 +543,7 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	}
 	fmt.Println("→ mysqld 起動")
 	if err := runMysqld("--datadir="+dataDir, "--port=0", "--skip-networking",
-		"--socket="+sock, "--pid-file=/tmp/sashiki-baseline.pid", "--log-error="+logErr, "--daemonize"); err != nil {
+		"--socket="+sock, "--pid-file="+runtimePath(cfg, "sashiki-baseline.pid"), "--log-error="+logErr, "--daemonize"); err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
 	stopped := false
@@ -561,7 +571,7 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 		return fmt.Errorf("shutdown: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	stopped = true
-	if err := waitGone("/tmp/sashiki-baseline.pid", 30*time.Second); err != nil {
+	if err := waitGone(runtimePath(cfg, "sashiki-baseline.pid"), 30*time.Second); err != nil {
 		return err
 	}
 	fmt.Println("→ auto.cnf 削除 (server_uuid 重複対策)")
@@ -648,7 +658,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 		return err
 	}
 
-	sock := "/tmp/sashiki-baseline.sock"
+	sock := runtimePath(cfg, "sashiki-baseline.sock")
 	logErr := filepath.Join(cfg.Hooks.LogDir, "..", "baseline.err")
 
 	// mysqld のパスと defaults を config から取る(#127)。固定 /usr/sbin/mysqld を
@@ -680,7 +690,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	}
 	fmt.Println("→ mysqld 起動")
 	startArgs := append(defaults, "--datadir="+dataDir, "--port=0", "--skip-networking",
-		"--socket="+sock, "--pid-file=/tmp/sashiki-baseline.pid",
+		"--socket="+sock, "--pid-file="+runtimePath(cfg, "sashiki-baseline.pid"),
 		"--log-error="+logErr, "--daemonize")
 	if err := runAsUser(mysqlUID, mysqlGID, mysqldBin, startArgs...); err != nil {
 		return fmt.Errorf("start: %w", err)
@@ -718,7 +728,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 		return fmt.Errorf("shutdown: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	stopped = true
-	if err := waitGone("/tmp/sashiki-baseline.pid", 30*time.Second); err != nil {
+	if err := waitGone(runtimePath(cfg, "sashiki-baseline.pid"), 30*time.Second); err != nil {
 		return err
 	}
 

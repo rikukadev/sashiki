@@ -13,7 +13,11 @@ func cmdCapacity(args []string) int {
 	for _, a := range args {
 		if a == "--json" {
 			jsonOut = true
+			continue
 		}
+		// 未知の引数を黙って無視しない(#308)。
+		fmt.Fprintf(os.Stderr, "sashiki %s: 不明な引数 %s\n", "capacity", a)
+		return exitUsage
 	}
 	code, data, err := call("GET", "/v1/capacity", nil)
 	if err != nil {

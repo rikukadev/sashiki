@@ -24,7 +24,11 @@ func cmdDoctor(args []string) int {
 	for _, a := range args {
 		if a == "--json" {
 			jsonOut = true
+			continue
 		}
+		// 未知の引数を黙って無視しない(#308)。
+		fmt.Fprintf(os.Stderr, "sashiki %s: 不明な引数 %s\n", "doctor", a)
+		return exitUsage
 	}
 	code, data, err := call("GET", "/v1/doctor", nil)
 	if err != nil {
@@ -73,7 +77,10 @@ func cmdGC(args []string) int {
 	for _, a := range args {
 		if a == "--orphans" {
 			orphans = true
+			continue
 		}
+		fmt.Fprintf(os.Stderr, "sashiki gc: 不明な引数 %s\n", a)
+		return exitUsage
 	}
 	if !orphans {
 		fmt.Fprintln(os.Stderr, "Usage: sashiki gc --orphans")

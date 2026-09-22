@@ -11,34 +11,50 @@ import (
 	"time"
 )
 
+// 待機の既定値。op wait(cmd/sashiki/op.go)と揃える(#308: 以前は 15m/300ms と
+// 10m/200ms で食い違っていた)。
+const (
+	defaultWaitTimeout  = 15 * time.Minute
+	defaultWaitInterval = 300 * time.Millisecond
+)
+
 // extractWaitFlags は --no-wait / --timeout / --interval を取り出し、残りの引数を返す。
-func extractWaitFlags(args []string) (rest []string, noWait bool, timeout, interval time.Duration) {
-	timeout = 15 * time.Minute
-	interval = 300 * time.Millisecond
+// 値が壊れていれば黙って既定に戻さずエラーにする(#308: `--timeout 30` のような
+// 指定が無視され、待っているつもりが既定で切れていた)。
+func extractWaitFlags(args []string) (rest []string, noWait bool, timeout, interval time.Duration, err error) {
+	timeout = defaultWaitTimeout
+	interval = defaultWaitInterval
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--no-wait":
 			noWait = true
 		case "--wait": // 既定。明示指定を許容(no-op)
-		case "--timeout":
-			if i+1 < len(args) {
-				i++
-				if d, e := time.ParseDuration(args[i]); e == nil {
-					timeout = d
-				}
+		case "--timeout", "--interval":
+			flag := args[i]
+			if i+1 >= len(args) {
+				return nil, false, 0, 0, fmt.Errorf("%s requires a value (例 %s 30m)", flag, flag)
 			}
-		case "--interval":
-			if i+1 < len(args) {
-				i++
-				if d, e := time.ParseDuration(args[i]); e == nil {
-					interval = d
-				}
+			i++
+			d, perr := time.ParseDuration(args[i])
+			if perr != nil {
+				return nil, false, 0, 0, fmt.Errorf("%s %q: %w(例 30m / 500ms)", flag, args[i], perr)
+			}
+			if d <= 0 {
+				return nil, false, 0, 0, fmt.Errorf("%s %q: 正の値にする", flag, args[i])
+			}
+			if flag == "--timeout" {
+				timeout = d
+			} else {
+				interval = d
 			}
 		default:
 			rest = append(rest, args[i])
 		}
 	}
-	return
+	// HTTP クライアント側のタイムアウトも合わせる(#308: 15 分固定だったので
+	// --timeout 30m にしてもポーリングの各リクエストが先に切れていた)。
+	setHTTPTimeout(timeout)
+	return rest, noWait, timeout, interval, nil
 }
 
 // operationIDFrom は 202 応答ボディ({"operation_id":...})から id を取る。

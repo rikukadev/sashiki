@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/rikukadev/sashiki/internal/config"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -60,4 +61,28 @@ func localBaselineTag(snapDir, preferred string) (tag string, replacing bool) {
 		return preferred, false
 	}
 	return "baseline-" + time.Now().UTC().Format("20060102T150405Z"), true
+}
+
+// runtimeDir は socket / pidfile / 一時ログの置き場を返す(#308)。
+// 以前は /tmp 固定で、root を分けた複数構成(e2e の temp root と本番)や
+// 並列実行で同じ名前を奪い合っていた。config の run_dir を使い、作れなければ
+// os.TempDir() に落とす。
+func runtimeDir(cfg config.Config) string {
+	dir := cfg.RunDir
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return os.TempDir()
+	}
+	// socket のパス長には上限(107 バイト程度)があるので、長すぎるなら /tmp に逃がす。
+	if len(dir) > 80 {
+		return os.TempDir()
+	}
+	return dir
+}
+
+// runtimePath は runtimeDir の下のファイル名を返す。
+func runtimePath(cfg config.Config, name string) string {
+	return filepath.Join(runtimeDir(cfg), name)
 }

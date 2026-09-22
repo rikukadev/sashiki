@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -137,7 +138,11 @@ func cmdTokenRevoke(db *state.DB, args []string) int {
 	}
 	if err := db.RevokeToken(args[0]); err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki token:", err)
-		return exitNotFound
+		// 無いトークン(3)と DB エラー(1)を分ける(#308)。
+		if errors.Is(err, state.ErrNotFound) {
+			return exitNotFound
+		}
+		return exitError
 	}
 	fmt.Printf("token '%s' を無効化しました\n", args[0])
 	return exitOK

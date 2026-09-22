@@ -84,3 +84,19 @@ func TestCreateAppUserSQLEscapes(t *testing.T) {
 		t.Errorf("user not quoted: %s", sql)
 	}
 }
+
+// runtimeDir は run_dir を使い、長すぎる/作れない場合は /tmp に落とす(#308)。
+func TestRuntimeDir(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{RunDir: dir}
+	if got := runtimePath(cfg, "x.sock"); got != filepath.Join(dir, "x.sock") {
+		t.Errorf("runtimePath = %q, want under %q", got, dir)
+	}
+	long := config.Config{RunDir: filepath.Join(dir, strings.Repeat("d", 90))}
+	if got := runtimeDir(long); got != os.TempDir() {
+		t.Errorf("too-long run_dir should fall back to TempDir, got %q", got)
+	}
+	if got := runtimeDir(config.Config{}); got != os.TempDir() {
+		t.Errorf("empty run_dir should fall back to TempDir, got %q", got)
+	}
+}
