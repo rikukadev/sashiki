@@ -23,7 +23,7 @@ const (
 	exitNotFound = 3
 	exitExists   = 4
 	exitCapacity = 5 // 507: capacity 不足(仕様 18章)
-	exitTimeout  = 5 // op wait のタイムアウト(operation 失敗とは区別する, #83)
+	exitTimeout  = 6 // --wait / op wait のタイムアウト(容量不足と区別する、#307)
 )
 
 var version = "dev" // -ldflags で埋め込む
@@ -47,7 +47,8 @@ func usage() int {
   sashiki show   <name> [--json]
   sashiki connect <name>
   sashiki env    <name> [--prefix P]        接続情報を KEY=VALUE で出す
-  sashiki init   --pool <p> [--device <dev>] [--engine mysql|postgres] [--app-pass <pw>] [--skip-packages] [--yes]
+  sashiki init   --pool <p> [--device <dev>] [--engine mysql|postgres] [--app-pass <pw>]
+                 [--platform darwin] [--root <dir>] [--skip-packages] [--yes]
   sashiki baseline import|list|refresh|promote|set|delete|build|validate|publish|gc   (詳細は sashiki baseline)
   sashiki token create|list|revoke
   sashiki op list | show <id> | wait <id>
@@ -60,6 +61,9 @@ func usage() int {
 非同期な変更(create/delete/reset/recreate/retry、baseline build|validate)は既定で完了まで待つ。
   baseline refresh は開始だけ返す(進捗は sashiki baseline list)。baseline promote は同期。
   --no-wait で待たずに operation を返す / --timeout <dur> / --interval <dur> で待機を調整。
+
+終了コード: 0=成功 1=エラー 2=使い方 3=不在(404) 4=競合(409) 5=容量不足(507) 6=待機タイムアウト。
+コマンド・API・config の一覧は docs/REFERENCE.md。
 `)
 	return exitUsage
 }

@@ -87,7 +87,7 @@ func opShow(id string) int {
 
 // opWait は operation の完了を待つ。exit code は
 //
-//	0=completed / 1(exitError)=operation 失敗 / 5(exitTimeout)=タイムアウト。
+//	0=completed / 1(exitError)=operation 失敗 / 6(exitTimeout)=タイムアウト。
 func opWait(args []string) int {
 	timeout := 10 * time.Minute
 	interval := 200 * time.Millisecond

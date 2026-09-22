@@ -251,6 +251,8 @@ sashiki drain                        # メンテ前に全ブランチを安全�
 sashiki delete demo
 ```
 
+コマンド・フラグ・終了コードの一覧は [docs/REFERENCE.md](docs/REFERENCE.md#cli)。
+
 `--exist-ok` と `env` は、**毎回走る仕組みから呼ぶ**ためのもの。
 `--exist-ok` が無いと 2 回目の create が 409 で落ちるので、呼び出し側は
 `|| true` で **実エラーまで握り潰す**回避に追い込まれる。`env` は
@@ -379,6 +381,7 @@ flowchart LR
 - 自社固有の処理(マイグレーション適用・データマスク)はコアに入れず **hooks** に追い出す。hook は `on-create` / `on-recreate` / `on-reset` / `on-delete` / `on-baseline-validate` の 5 つ(baseline の build は `baseline.refresh_script` か `source_dir`)。`on-delete` は DB を止めた後に走る(最終ダンプには使えない)。`on-reset` / `on-delete` の失敗は記録して続行する
 
 設計仕様は [docs/SPEC.md](docs/SPEC.md)、設計判断(ADR)は [docs/DECISIONS.md](docs/DECISIONS.md)、コスト比較は [docs/COSTS.md](docs/COSTS.md)。
+CLI / HTTP API / hooks の環境変数 / Action の入力 / Terraform の変数 / config の一覧は [docs/REFERENCE.md](docs/REFERENCE.md)。
 
 ## プロジェクトに導入するとき用意するもの
 
@@ -468,7 +471,8 @@ E2E は上ほど速く、下ほど本物に近い。
 いなかった**([#263](https://github.com/rikukadev/sashiki/pull/263))のは、
 ここが無かったため。
 
-Issue / PR 歓迎。設計の背景は [docs/SPEC.md](docs/SPEC.md) と [docs/DECISIONS.md](docs/DECISIONS.md) を参照。
+Issue / PR 歓迎。設計の背景は [docs/SPEC.md](docs/SPEC.md) と [docs/DECISIONS.md](docs/DECISIONS.md)、
+インターフェースの一覧は [docs/REFERENCE.md](docs/REFERENCE.md) を参照。
 
 ## License
 
