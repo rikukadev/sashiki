@@ -5,40 +5,57 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"time"
 )
 
+// 待機の既定値。op wait(cmd/sashiki/op.go)と揃える(#308: 以前は 15m/300ms と
+// 10m/200ms で食い違っていた)。
+const (
+	defaultWaitTimeout  = 15 * time.Minute
+	defaultWaitInterval = 300 * time.Millisecond
+)
+
 // extractWaitFlags は --no-wait / --timeout / --interval を取り出し、残りの引数を返す。
-func extractWaitFlags(args []string) (rest []string, noWait bool, timeout, interval time.Duration) {
-	timeout = 15 * time.Minute
-	interval = 300 * time.Millisecond
+// 値が壊れていれば黙って既定に戻さずエラーにする(#308: `--timeout 30` のような
+// 指定が無視され、待っているつもりが既定で切れていた)。
+func extractWaitFlags(args []string) (rest []string, noWait bool, timeout, interval time.Duration, err error) {
+	timeout = defaultWaitTimeout
+	interval = defaultWaitInterval
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--no-wait":
 			noWait = true
 		case "--wait": // 既定。明示指定を許容(no-op)
-		case "--timeout":
-			if i+1 < len(args) {
-				i++
-				if d, e := time.ParseDuration(args[i]); e == nil {
-					timeout = d
-				}
+		case "--timeout", "--interval":
+			flag := args[i]
+			if i+1 >= len(args) {
+				return nil, false, 0, 0, fmt.Errorf("%s requires a value (例 %s 30m)", flag, flag)
 			}
-		case "--interval":
-			if i+1 < len(args) {
-				i++
-				if d, e := time.ParseDuration(args[i]); e == nil {
-					interval = d
-				}
+			i++
+			d, perr := time.ParseDuration(args[i])
+			if perr != nil {
+				return nil, false, 0, 0, fmt.Errorf("%s %q: %w(例 30m / 500ms)", flag, args[i], perr)
+			}
+			if d <= 0 {
+				return nil, false, 0, 0, fmt.Errorf("%s %q: 正の値にする", flag, args[i])
+			}
+			if flag == "--timeout" {
+				timeout = d
+			} else {
+				interval = d
 			}
 		default:
 			rest = append(rest, args[i])
 		}
 	}
-	return
+	// HTTP クライアント側のタイムアウトも合わせる(#308: 15 分固定だったので
+	// --timeout 30m にしてもポーリングの各リクエストが先に切れていた)。
+	setHTTPTimeout(timeout)
+	return rest, noWait, timeout, interval, nil
 }
 
 // operationIDFrom は 202 応答ボディ({"operation_id":...})から id を取る。
@@ -50,6 +67,21 @@ func operationIDFrom(data []byte) string {
 	return r.OperationID
 }
 
+// errWaitTimeout は「期限までに operation が終わらなかった」。API エラーや通信断と
+// 区別して、終了コード 6 はこれだけに使う(#308 review)。
+var errWaitTimeout = errors.New("wait timed out")
+
+// statusError は API が非 200 を返したときのエラー。終了コードを status から決める。
+type statusError struct {
+	code int
+	msg  string
+}
+
+func (e *statusError) Error() string { return e.msg }
+
+// pollOperationFn はテストで差し替えるための間接参照。
+var pollOperationFn = pollOperation
+
 // pollOperation は operation が完了するまでポーリングし、最終 state と error を返す。
 func pollOperation(id string, timeout, interval time.Duration) (state, errText string, err error) {
 	deadline := time.Now().Add(timeout)
@@ -59,7 +91,7 @@ func pollOperation(id string, timeout, interval time.Duration) (state, errText s
 			return "", "", cerr
 		}
 		if code != http.StatusOK {
-			return "", "", fmt.Errorf("%s", apiError(data))
+			return "", "", &statusError{code: code, msg: apiError(data)}
 		}
 		var o opView
 		_ = json.Unmarshal(data, &o)
@@ -68,7 +100,7 @@ func pollOperation(id string, timeout, interval time.Duration) (state, errText s
 		}
 		time.Sleep(interval)
 	}
-	return "running", "", fmt.Errorf("wait timed out after %s (operation still running)", timeout)
+	return "running", "", fmt.Errorf("%w after %s (operation %s is still running)", errWaitTimeout, timeout, id)
 }
 
 // awaitMutation は 202 応答の operation を(既定で)待つ。
@@ -83,10 +115,20 @@ func awaitMutation(data []byte, noWait bool, timeout, interval time.Duration) (d
 		fmt.Println(opID)
 		return false, exitOK
 	}
-	st, errMsg, err := pollOperation(opID, timeout, interval)
+	st, errMsg, err := pollOperationFn(opID, timeout, interval)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
-		return false, exitTimeout
+		// 6 は「期限までに終わらなかった」だけに使う。通信断や 401 / 404 / 500 まで
+		// 6 にすると、CI が「詰まっている」と「容量不足」を区別する意味が無くなる。
+		var se *statusError
+		switch {
+		case errors.Is(err, errWaitTimeout):
+			return false, exitTimeout
+		case errors.As(err, &se):
+			return false, statusToExit(se.code)
+		default:
+			return false, exitError
+		}
 	}
 	if st != "completed" {
 		if errMsg != "" {

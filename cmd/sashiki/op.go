@@ -87,42 +87,19 @@ func opShow(id string) int {
 
 // opWait は operation の完了を待つ。exit code は
 //
-//	0=completed / 1(exitError)=operation 失敗 / 5(exitTimeout)=タイムアウト。
+//	0=completed / 1(exitError)=operation 失敗 / 6(exitTimeout)=タイムアウト。
 func opWait(args []string) int {
-	timeout := 10 * time.Minute
-	interval := 200 * time.Millisecond
-	var id string
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--timeout":
-			if i+1 >= len(args) {
-				return usageOp()
-			}
-			i++
-			d, err := time.ParseDuration(args[i])
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "sashiki: --timeout:", err)
-				return exitUsage
-			}
-			timeout = d
-		case "--interval":
-			if i+1 >= len(args) {
-				return usageOp()
-			}
-			i++
-			d, err := time.ParseDuration(args[i])
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "sashiki: --interval:", err)
-				return exitUsage
-			}
-			interval = d
-		default:
-			id = args[i]
-		}
+	// 既定値もパースも create / reset と同じ経路を使う(#308 review: 15m/300ms と
+	// 10m/200ms で食い違い、--timeout が HTTP クライアントに伝わっていなかった)。
+	rest, _, timeout, interval, err := extractWaitFlags(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitUsage
 	}
-	if id == "" {
+	if len(rest) != 1 {
 		return usageOp()
 	}
+	id := rest[0]
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		code, data, err := call("GET", "/v1/operations/"+id, nil)

@@ -1,10 +1,14 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"github.com/rikukadev/sashiki/internal/config"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -60,4 +64,26 @@ func localBaselineTag(snapDir, preferred string) (tag string, replacing bool) {
 		return preferred, false
 	}
 	return "baseline-" + time.Now().UTC().Format("20060102T150405Z"), true
+}
+
+// runtimePath は baseline import が使う socket / pidfile のパスを返す(#308)。
+//
+// 置き場は /tmp のままにする。branch の mysqld を閉じ込める AppArmor プロファイルが
+// 許しているのは /tmp/sashiki-*.sock* と /tmp/sashiki-*.pid だけで、しかも mysqld は
+// mysql ユーザーに降格して起動するので、root しか書けない /run/sashiki には
+// socket を作れない(そのまま使うと baseline import が「Failed to start mysqld」で落ちる)。
+//
+// 代わりに config(= 構成)ごとに違う名前にして、複数 root や並列実行で同じ名前を
+// 奪い合わないようにする。name は "sashiki-" で始まり .sock / .pid で終わること
+// (AppArmor のパターンに合わせる)。
+func runtimePath(cfg config.Config, name string) string {
+	return uniqueTmpName(name, cfg.StateDB+"|"+cfg.Storage.Local.Root+"|"+cfg.Storage.Zfs.Pool)
+}
+
+// uniqueTmpName は /tmp/<base>-<8 hex><ext> を返す。key が同じなら同じ名前になる。
+func uniqueTmpName(name, key string) string {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	sum := sha256.Sum256([]byte(key))
+	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%s%s", base, hex.EncodeToString(sum[:4]), ext))
 }

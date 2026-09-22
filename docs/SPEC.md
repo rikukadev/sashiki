@@ -543,7 +543,7 @@ sashiki sleep <name>            sashiki wake <name>
 sashiki delete <name>           sashiki retry <name>
 sashiki lease renew <name> --for <dur>
 sashiki list [--json]           sashiki show <name> [--json]
-sashiki connect <name>          # mysql クライアントを exec
+sashiki connect <name>          # engine に応じて mysql / psql を exec
 sashiki hooks run <name> <event>
 sashiki baseline list | build | validate <b> | publish <b> | set <b> | gc [--dry-run]
 sashiki op list | show <id> | wait <id>
@@ -554,7 +554,7 @@ sashiki init --pool P --device DEV [--yes]
 sashiki version
 ```
 
-終了コード: 0 成功 / 1 一般 / 2 引数 / 3 見つからない / 4 既存 / 5 capacity 不足。`--json` は API レスポンスそのまま。
+終了コード: 0 成功 / 1 一般 / 2 引数 / 3 見つからない / 4 既存(409) / 5 capacity 不足(507) / 6 待機タイムアウト。`--json` は API レスポンスそのまま。
 
 `sashiki show` の error 表示例:
 

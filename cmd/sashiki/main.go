@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -23,7 +24,7 @@ const (
 	exitNotFound = 3
 	exitExists   = 4
 	exitCapacity = 5 // 507: capacity 不足(仕様 18章)
-	exitTimeout  = 5 // op wait のタイムアウト(operation 失敗とは区別する, #83)
+	exitTimeout  = 6 // --wait / op wait のタイムアウト(容量不足と区別する、#307)
 )
 
 var version = "dev" // -ldflags で埋め込む
@@ -47,7 +48,8 @@ func usage() int {
   sashiki show   <name> [--json]
   sashiki connect <name>
   sashiki env    <name> [--prefix P]        接続情報を KEY=VALUE で出す
-  sashiki init   --pool <p> [--device <dev>] [--engine mysql|postgres] [--app-pass <pw>] [--skip-packages] [--yes]
+  sashiki init   --pool <p> [--device <dev>] [--engine mysql|postgres] [--app-pass <pw>]
+                 [--platform darwin] [--root <dir>] [--skip-packages] [--yes]
   sashiki baseline import|list|refresh|promote|set|delete|build|validate|publish|gc   (詳細は sashiki baseline)
   sashiki token create|list|revoke
   sashiki op list | show <id> | wait <id>
@@ -60,6 +62,9 @@ func usage() int {
 非同期な変更(create/delete/reset/recreate/retry、baseline build|validate)は既定で完了まで待つ。
   baseline refresh は開始だけ返す(進捗は sashiki baseline list)。baseline promote は同期。
   --no-wait で待たずに operation を返す / --timeout <dur> / --interval <dur> で待機を調整。
+
+終了コード: 0=成功 1=エラー 2=使い方 3=不在(404) 4=競合(409) 5=容量不足(507) 6=待機タイムアウト。
+コマンド・API・config の一覧は docs/REFERENCE.md。
 `)
 	return exitUsage
 }
@@ -161,7 +166,7 @@ func call(method, path string, body any) (int, []byte, error) {
 	if t := apiToken(); t != "" {
 		req.Header.Set("Authorization", "Bearer "+t)
 	}
-	client := &http.Client{Timeout: 15 * time.Minute} // create/reset はストレージ次第で長い
+	client := &http.Client{Timeout: httpTimeout()} // create/reset はストレージ次第で長い
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -169,6 +174,31 @@ func call(method, path string, body any) (int, []byte, error) {
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	return resp.StatusCode, data, err
+}
+
+// httpTimeout は 1 リクエストの上限。--timeout がそれより長ければ広げる(#308)。
+var httpTimeoutValue atomic.Int64
+
+func httpTimeout() time.Duration {
+	if v := httpTimeoutValue.Load(); v > 0 {
+		return time.Duration(v)
+	}
+	return defaultWaitTimeout
+}
+
+func setHTTPTimeout(d time.Duration) {
+	if d > defaultWaitTimeout {
+		httpTimeoutValue.Store(int64(d))
+	}
+}
+
+// callErr は call の失敗を人が読める 1 行にする。err が nil のときだけ API の
+// エラーボディを使う(#308: 通信失敗で `sashiki: ` と空行だけ出していた)。
+func callErr(err error, data []byte) string {
+	if err != nil {
+		return err.Error()
+	}
+	return apiError(data)
 }
 
 func apiError(data []byte) string {
@@ -257,6 +287,10 @@ func parseFlagsKV(args []string) (pos []string, port int, jsonOut bool, kv map[s
 			i++
 			kv[a[2:]] = args[i]
 		default:
+			// 未知のフラグを黙って位置引数として飲まない(#308)。
+			if strings.HasPrefix(a, "-") && a != "-" {
+				return nil, 0, false, nil, fmt.Errorf("unknown flag %s", a)
+			}
 			pos = append(pos, a)
 		}
 	}
@@ -264,9 +298,17 @@ func parseFlagsKV(args []string) (pos []string, port int, jsonOut bool, kv map[s
 }
 
 func cmdCreate(args []string) int {
-	args, noWait, timeout, interval := extractWaitFlags(args)
+	args, noWait, timeout, interval, werr := extractWaitFlags(args)
+	if werr != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", werr)
+		return exitUsage
+	}
 	pos, port, jsonOut, kv, err := parseFlagsKV(args)
-	if err != nil || len(pos) != 1 {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitUsage
+	}
+	if len(pos) != 1 {
 		return usage()
 	}
 	body := map[string]any{"name": pos[0], "port": port}
@@ -301,6 +343,12 @@ func cmdCreate(args []string) int {
 		}
 		bcode, bdata, berr := call("GET", "/v1/branches/"+pos[0], nil)
 		if berr != nil || bcode != http.StatusOK {
+			// 作成自体は成功している。接続情報だけ取れなかったことを黙らない(#308)。
+			fmt.Fprintf(os.Stderr, "sashiki: 警告 作成後の取得に失敗しました(接続情報は sashiki show %s): %s\n",
+				pos[0], callErr(berr, bdata))
+			if jsonOut {
+				return exitError
+			}
 			fmt.Printf("branch '%s' ready\n", pos[0])
 			return exitOK
 		}
@@ -323,7 +371,11 @@ func printCreatedBranch(data []byte, jsonOut bool) int {
 }
 
 func cmdDelete(args []string) int {
-	args, noWait, timeout, interval := extractWaitFlags(args)
+	args, noWait, timeout, interval, werr := extractWaitFlags(args)
+	if werr != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", werr)
+		return exitUsage
+	}
 	if len(args) != 1 {
 		return usage()
 	}
@@ -366,6 +418,16 @@ func cmdLease(args []string) int {
 		case "--json":
 			jsonOut = true
 		default:
+			// 未知のフラグが name を上書きすると /v1/branches/--typo/lease を
+			// 投げて 404 になる(#308 review)。
+			if strings.HasPrefix(rest[i], "-") && rest[i] != "-" {
+				fmt.Fprintf(os.Stderr, "sashiki lease: 不明なフラグ %s\n", rest[i])
+				return exitUsage
+			}
+			if name != "" {
+				fmt.Fprintf(os.Stderr, "sashiki lease: ブランチ名が複数あります(%s, %s)\n", name, rest[i])
+				return exitUsage
+			}
 			name = rest[i]
 		}
 	}
@@ -420,9 +482,17 @@ func cmdSyncBranch(args []string, action string) int {
 }
 
 func cmdSimpleBranch(args []string, action string) int {
-	args, noWait, timeout, interval := extractWaitFlags(args)
+	args, noWait, timeout, interval, werr := extractWaitFlags(args)
+	if werr != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", werr)
+		return exitUsage
+	}
 	pos, _, jsonOut, err := parseFlags(args)
-	if err != nil || len(pos) != 1 {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitUsage
+	}
+	if len(pos) != 1 {
 		return usage()
 	}
 	// reset は origin(作成時の baseline)に戻す。baseline が更新済み(stale)なら
@@ -449,9 +519,12 @@ func cmdSimpleBranch(args []string, action string) int {
 		return exit
 	}
 	if jsonOut {
-		if _, bdata, e := call("GET", "/v1/branches/"+pos[0], nil); e == nil {
-			fmt.Println(string(bdata))
+		bcode, bdata, e := call("GET", "/v1/branches/"+pos[0], nil)
+		if e != nil || bcode != http.StatusOK {
+			fmt.Fprintf(os.Stderr, "sashiki: %s は完了しましたが取得に失敗しました: %s\n", action, callErr(e, bdata))
+			return exitError
 		}
+		fmt.Println(string(bdata))
 	} else {
 		fmt.Printf("branch '%s' %s\n", pos[0], action)
 	}
@@ -459,9 +532,14 @@ func cmdSimpleBranch(args []string, action string) int {
 }
 
 func cmdList(args []string) int {
-	_, _, jsonOut, err := parseFlags(args)
+	pos, _, jsonOut, err := parseFlags(args)
 	if err != nil {
-		return usage()
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitUsage
+	}
+	if len(pos) > 0 {
+		fmt.Fprintf(os.Stderr, "sashiki list: 余分な引数 %v(ブランチ 1 件は sashiki show <name>)\n", pos)
+		return exitUsage
 	}
 	code, data, err := call("GET", "/v1/branches", nil)
 	if err != nil {
@@ -583,7 +661,7 @@ func cmdEnv(args []string) int {
 	}
 	code, data, err := call("GET", "/v1/branches/"+pos[0], nil)
 	if err != nil || code != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
+		fmt.Fprintln(os.Stderr, "sashiki:", callErr(err, data))
 		return statusToExit(code)
 	}
 	var b branchView
@@ -604,25 +682,64 @@ func cmdConnect(args []string) int {
 	}
 	code, data, err := call("GET", "/v1/branches/"+args[0], nil)
 	if err != nil || code != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
+		fmt.Fprintln(os.Stderr, "sashiki:", callErr(err, data))
 		return statusToExit(code)
 	}
 	var b branchView
 	_ = json.Unmarshal(data, &b)
-	mysqlPath, err := exec.LookPath("mysql")
+	// engine に合わせたクライアントを exec する(#308: postgres でも mysql を
+	// 起動し、host は 127.0.0.1、パスワードは dev 固定だった)。
+	// パスワードは環境変数で渡す。無ければクライアントに尋ねさせる。
+	client, argv := "mysql", []string{"mysql", "-u" + b.User, "-h" + connectHost(b), "-P" + strconv.Itoa(b.Port)}
+	env := os.Environ()
+	pass := os.Getenv("SASHIKI_DB_PASSWORD")
+	if b.Engine == "postgres" {
+		// psql は -d が無いとユーザー名(dev@pr-1)を DB 名として使い
+		// 「database "dev@pr-1" does not exist」で落ちる(#308 review)。
+		// baseline に作った DB 名は API が持っていないので、環境変数で受け取り、
+		// 無ければ必ず存在する postgres に繋ぐ。
+		db := os.Getenv("SASHIKI_DB_NAME")
+		if db == "" {
+			db = "postgres"
+			fmt.Fprintf(os.Stderr, "sashiki: データベース名が分からないので %q に繋ぎます(SASHIKI_DB_NAME で指定できます)\n", db)
+		}
+		client = "psql"
+		argv = []string{"psql", "-U", b.User, "-h", connectHost(b), "-p", strconv.Itoa(b.Port), "-d", db}
+		if pass != "" {
+			env = append(env, "PGPASSWORD="+pass)
+		}
+	} else {
+		if pass != "" {
+			env = append(env, "MYSQL_PWD="+pass)
+		} else {
+			argv = append(argv, "-p") // 対話で尋ねる
+		}
+	}
+	path, err := exec.LookPath(client)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "sashiki: mysql client not found in PATH")
+		fmt.Fprintf(os.Stderr, "sashiki: %s が PATH にありません\n", client)
 		return exitError
 	}
 	// user は必ず API が返した値を使う。proxy 経由では dev@<branch> でないと
 	// ルーティングできず、直結では dev でないと認証が通らない(#260)。
-	argv := []string{"mysql", "-u" + b.User, "-pdev", "-h127.0.0.1", "-P" + strconv.Itoa(b.Port)}
-	// CLI はそのまま mysql に化ける。
-	if err := syscall.Exec(mysqlPath, argv, os.Environ()); err != nil {
-		fmt.Fprintln(os.Stderr, "sashiki: exec mysql:", err)
+	// CLI はそのままクライアントに化ける。
+	if err := syscall.Exec(path, argv, env); err != nil {
+		fmt.Fprintf(os.Stderr, "sashiki: exec %s: %v\n", client, err)
 		return exitError
 	}
 	return exitOK
+}
+
+// connectHost は接続先ホスト。API の host が名前解決できない構成もあるので、
+// SASHIKI_DB_HOST で上書きできる。
+func connectHost(b branchView) string {
+	if h := os.Getenv("SASHIKI_DB_HOST"); h != "" {
+		return h
+	}
+	if b.Host == "" {
+		return "127.0.0.1"
+	}
+	return b.Host
 }
 
 func humanBytes(n int64) string {
