@@ -379,6 +379,7 @@ flowchart LR
 - 自社固有の処理(マイグレーション適用・データマスク)はコアに入れず **hooks** に追い出す。hook は `on-create` / `on-recreate` / `on-reset` / `on-delete` / `on-baseline-validate` の 5 つ(baseline の build は `baseline.refresh_script` か `source_dir`)。`on-delete` は DB を止めた後に走る(最終ダンプには使えない)。`on-reset` / `on-delete` の失敗は記録して続行する
 
 設計仕様は [docs/SPEC.md](docs/SPEC.md)、設計判断(ADR)は [docs/DECISIONS.md](docs/DECISIONS.md)、コスト比較は [docs/COSTS.md](docs/COSTS.md)。
+版を上げるときに挙動が変わる点は [docs/UPGRADING.md](docs/UPGRADING.md)。
 
 ## プロジェクトに導入するとき用意するもの
 
