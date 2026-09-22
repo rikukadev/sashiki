@@ -53,6 +53,7 @@ branches:
   idle_stop_after: 30m      # 接続なしで postgres を停止(データは残る、再接続で起床)
   delete_after_idle: 168h   # 7日間接続なしで削除。PR close 取りこぼしの保険
   operation_retention: 168h # 完了した operation を7日で掃除(0=無期限)
+  error_retention: 72h      # error 状態になって3日で削除(調査の猶予。0=残す)。lease(--ttl)は error でも効く
   default_profile: preview
   profiles:
     preview: { idle_stop_after: 30m, delete_after_idle: 168h }

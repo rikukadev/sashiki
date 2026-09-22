@@ -677,20 +677,89 @@ func TestReapStopsButDoesNotDeleteBaselineBackingBranch(t *testing.T) {
 	}
 }
 
-func TestReapKeepsErrorBranches(t *testing.T) {
+// error 状態は delete_after_idle では消さない(調査のため)。error_retention を
+// 過ぎたら消す(#298)。
+func TestReapKeepsErrorBranchesUntilRetention(t *testing.T) {
+	ctx := context.Background()
 	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", func(c *Config) {
 		c.DeleteAfterIdle = time.Nanosecond
+		c.ErrorRetention = time.Hour
 	})
-	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
 		t.Fatal(err)
 	}
 	_ = m.db.SetState("pr-1", state.StateError, "boom")
 	time.Sleep(5 * time.Millisecond)
-	if err := m.Reap(context.Background()); err != nil {
+	if err := m.Reap(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Get(context.Background(), "pr-1"); err != nil {
-		t.Errorf("error branch should be kept: %v", err)
+	b, err := m.db.GetBranch("pr-1")
+	if err != nil {
+		t.Fatalf("error branch within retention should be kept: %v", err)
+	}
+	if b.ErrorAt == nil {
+		t.Fatal("error_at should be recorded when entering error")
+	}
+	if err := m.db.SetErrorAtForTest("pr-1", time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(ctx, "pr-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("error branch past retention should be deleted, got %v", err)
+	}
+}
+
+// error_retention: 0 は従来どおり残す。
+func TestReapKeepsErrorBranchesWhenRetentionDisabled(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", func(c *Config) {
+		c.DeleteAfterIdle = time.Nanosecond
+	})
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-1", state.StateError, "boom")
+	_ = m.db.SetErrorAtForTest("pr-1", time.Now().Add(-1000*time.Hour))
+	if err := m.Reap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(ctx, "pr-1"); err != nil {
+		t.Errorf("error branch should be kept when error_retention is 0: %v", err)
+	}
+}
+
+// lease 失効は error 状態でも削除する(#298)。
+func TestReapDeletesExpiredLeaseInErrorState(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", nil)
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetError("pr-1", "create", CodeHookFailed, true, "hook failed", nil)
+	if err := m.db.SetExpiresAt("pr-1", time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(ctx, "pr-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expired lease should delete an error branch, got %v", err)
+	}
+}
+
+// error_at は error を抜けると消え、再度 error になった時刻で数え直す。
+func TestErrorAtResetsWhenLeavingError(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", nil)
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-1", state.StateError, "boom")
+	_ = m.db.SetState("pr-1", state.StateRunning, "")
+	if b, _ := m.db.GetBranch("pr-1"); b.ErrorAt != nil {
+		t.Errorf("error_at should clear when leaving error, got %v", b.ErrorAt)
 	}
 }
 

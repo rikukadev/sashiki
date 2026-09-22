@@ -3,7 +3,10 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"time"
@@ -161,6 +164,10 @@ type Branches struct {
 	DeleteAfterIdle    time.Duration `yaml:"delete_after_idle"`
 	ReaperInterval     time.Duration `yaml:"reaper_interval"`
 	OperationRetention time.Duration `yaml:"operation_retention"` // 完了 operation の保持期間(#83)。0=無期限
+	// ErrorRetention: error 状態になってからこの期間が過ぎたブランチを reaper が削除する
+	// (#298)。調べる時間を残しつつ、max_branches と port を占有し続けないように。
+	// 0 = 削除しない(従来の挙動)。lease(--ttl)はこれと無関係に error でも効く。
+	ErrorRetention time.Duration `yaml:"error_retention"`
 
 	// profile: 用途ごとに idle lifecycle を変える(仕様 11-3)。
 	// branch は create 時に profile を1つ持ち、reaper はその profile の
@@ -190,7 +197,7 @@ type Baseline struct {
 	ValidatePort     int           `yaml:"validate_port"`   // validate 用の一時ポート(既定 3999)
 	MaskedSentinel   string        `yaml:"masked_sentinel"` // build script が touch する印(既定 /run/sashiki/baseline-masked)
 	KeepLast         int           `yaml:"keep_last"`       // GC で残す直近 N(既定 3、#86)
-	Retention        time.Duration `yaml:"retention"`       // GC で残す期間(0=無期限、#86)
+	Retention        time.Duration `yaml:"retention"`       // GC で追加で残す期間(0 = 期間では残さず keep_last だけで決める、#86)
 }
 
 // Hooks はフック設定。
@@ -262,6 +269,7 @@ func Default() Config {
 			DeleteAfterIdle:    168 * time.Hour,
 			ReaperInterval:     time.Minute,
 			OperationRetention: 168 * time.Hour, // 7日
+			ErrorRetention:     72 * time.Hour,  // 3日(#298)
 
 			Profiles: map[string]ProfilePolicy{
 				"preview": {IdleStopAfter: 30 * time.Minute, DeleteAfterIdle: 168 * time.Hour},
@@ -287,7 +295,13 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	// 未知キーは黙って無視せずエラーにする(#300)。SPEC の古い書き方
+	// (baselines: / トップレベル profiles: / branches.max_running …)を書いても
+	// 効かないまま起動していた。旧名 alias(zfs / fsx / proxy_user / proxy_pass)は
+	// 構造体に残してあるので引き続き読める。
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 		return cfg, fmt.Errorf("parse %s: %w", path, err)
 	}
 	cfg.normalize()
@@ -384,6 +398,33 @@ func (c Config) Validate() error {
 	}
 	if m := c.Engine.Postgres.Mode; m != "" && m != "systemd" && m != "process" {
 		return fmt.Errorf("engine.postgres.mode %q is not supported (systemd | process)", m)
+	}
+	// サイズは起動時に検証する(#300)。以前は解釈できない値が黙って 0 になり、
+	// quota 無制限・メモリ admission 無効として動いていた。
+	for key, v := range map[string]string{
+		"storage.default_storage_quota":   c.Storage.DefaultStorageQuota,
+		"engine.mysql.buffer_pool_size":   c.Engine.Mysql.BufferPoolSize,
+		"engine.mysql.expected_rss":       c.Engine.Mysql.ExpectedRSS,
+		"engine.mysql.memory_headroom":    c.Engine.Mysql.MemoryHeadroom,
+		"engine.postgres.shared_buffers":  c.Engine.Postgres.SharedBuffers,
+		"engine.postgres.expected_rss":    c.Engine.Postgres.ExpectedRSS,
+		"engine.postgres.memory_headroom": c.Engine.Postgres.MemoryHeadroom,
+	} {
+		if _, err := ParseSize(v); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+	}
+	// watermark は 0〜1 の比率(0 = 無効)。80 のような百分率は永遠に発火しない(#300)。
+	hw, cw := c.Storage.HighWatermark, c.Storage.CriticalWatermark
+	if hw < 0 || hw > 1 || cw < 0 || cw > 1 {
+		return fmt.Errorf("storage.high_watermark / critical_watermark は 0〜1 の比率で書く(例 0.8)。got high=%v critical=%v", hw, cw)
+	}
+	if hw > 0 && cw > 0 && hw > cw {
+		return fmt.Errorf("storage.high_watermark (%v) は critical_watermark (%v) 以下にする", hw, cw)
+	}
+	// TLS は cert と key の両方が要る。片方だけだと黙って平文で listen していた(#300)。
+	if (c.Proxy.TLSCert == "") != (c.Proxy.TLSKey == "") {
+		return fmt.Errorf("proxy.tls_cert と proxy.tls_key は両方指定する(片方だけだと TLS 終端しない)")
 	}
 	return nil
 }

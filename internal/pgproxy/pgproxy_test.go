@@ -135,7 +135,8 @@ func fakeBackend(t *testing.T) (addr string, startupParams chan map[string]strin
 // scramClientHandshake はテスト用クライアントとして proxy に対し SCRAM 認証を行う。
 func scramClientHandshake(t *testing.T, conn net.Conn, user, password string) error {
 	t.Helper()
-	if err := writeStartup(conn, map[string]string{"user": user, "database": "app"}); err != nil {
+	if err := writeStartup(conn, map[string]string{"user": user, "database": "app",
+		"application_name": "rails-console", "TimeZone": "Asia/Tokyo"}); err != nil {
 		return err
 	}
 	cl := &scramClient{password: password}
@@ -259,6 +260,10 @@ func TestProxyRoutesAfterAuth(t *testing.T) {
 		}
 		if p["database"] != "app" {
 			t.Errorf("backend database = %q, want app", p["database"])
+		}
+		// クライアントの startup パラメータは backend に届く(#305)
+		if p["application_name"] != "rails-console" || p["TimeZone"] != "Asia/Tokyo" {
+			t.Errorf("client startup params should be forwarded, got %v", p)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("backend startup params not received")
@@ -542,5 +547,44 @@ func TestProxyIgnoresUnknownCancel(t *testing.T) {
 	}
 	if len(r.routed) != 0 {
 		t.Error("キャンセルで branch を触ってはいけない")
+	}
+}
+
+// replication 接続は proxy 経由では断る(#305)。
+func TestProxyRejectsReplicationStartup(t *testing.T) {
+	r := &fakeRouter{port: 1}
+	addr := startProxy(t, Config{AppUser: "dev", AppPassword: "pw"}, r)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if err := writeStartup(conn, map[string]string{"user": "dev@pr-1", "database": "app", "replication": "database"}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readMessage(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.typ != msgErrorResponse || !strings.Contains(errorText(m.body), "replication") {
+		t.Fatalf("replication startup should be rejected, got %q %q", m.typ, errorText(m.body))
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.routed) != 0 {
+		t.Errorf("must not route a replication connection: %v", r.routed)
+	}
+}
+
+func TestBackendStartupParamsReplacesUserOnly(t *testing.T) {
+	got := backendStartupParams("dev", map[string]string{
+		"user": "dev@pr-1", "database": "app", "application_name": "psql", "options": "-c search_path=x",
+	})
+	if got["user"] != "dev" || got["database"] != "app" || got["application_name"] != "psql" || got["options"] != "-c search_path=x" {
+		t.Errorf("params = %v", got)
+	}
+	if _, ok := backendStartupParams("dev", map[string]string{"user": "dev@pr-1"})["database"]; ok {
+		t.Error("empty database should be omitted")
 	}
 }

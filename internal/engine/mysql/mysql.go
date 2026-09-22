@@ -40,6 +40,16 @@ type Config struct {
 	// を先頭に置く。datadir/port/socket/pid-file/log-error は sashiki が後続の
 	// 引数で必ず上書きする(コマンドライン優先)。
 	ExtraCnf string
+	// BufferPoolBytes は branch mysqld の innodb_buffer_pool_size(バイト)。
+	// 0 なら指定しない(systemd は unit 側、process は mysqld 既定)。以前は
+	// engine.mysql.buffer_pool_size がメモリ見積もりにしか使われず、実際の
+	// mysqld は unit の 256M 固定 / process では 128M だった(#299)。
+	BufferPoolBytes int64
+	// StopTimeout は process モードの graceful stop を待つ時間(既定 10 分)。
+	// systemd は #245 で TimeoutStopSec=600 にしたが、process モードは
+	// ReadyTimeout(30s)を流用していて、buffer pool の大きい mysqld の停止が
+	// 間に合わず recreate / promote が error になっていた(#302)。
+	StopTimeout time.Duration
 }
 
 const (
@@ -51,6 +61,8 @@ const (
 type Engine struct {
 	cfg Config
 	run func(ctx context.Context, name string, args ...string) (string, error)
+	// procNames は process モードで pidfile の pid が本当に mysqld かを確かめる名前(#302)。
+	procNames []string
 }
 
 // New は MySQL エンジンを作る。
@@ -73,7 +85,10 @@ func New(cfg Config) *Engine {
 	if cfg.RunUser == "" {
 		cfg.RunUser = "mysql"
 	}
-	e := &Engine{cfg: cfg}
+	if cfg.StopTimeout == 0 {
+		cfg.StopTimeout = 10 * time.Minute
+	}
+	e := &Engine{cfg: cfg, procNames: []string{"mysqld", filepath.Base(cfg.MysqldBin)}}
 	e.run = e.execCmd
 	return e
 }
@@ -136,6 +151,12 @@ func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
 	// 展開するため、パッケージ更新後に init を再実行していないホストでも次の
 	// Start から branch listener を loopback に閉じられる(#288)。
 	defaults := "--bind-address=127.0.0.1"
+	// buffer pool も同じ経路で渡す(#299)。新しい unit は固定値を持たないので
+	// これが効く。init を再実行していない古い unit は後ろに 256M 固定があり
+	// そちらが勝つ(従来と同じ挙動で、悪化はしない)。
+	if e.cfg.BufferPoolBytes > 0 {
+		defaults += fmt.Sprintf(" --innodb-buffer-pool-size=%d", e.cfg.BufferPoolBytes)
+	}
 	if e.cfg.ExtraCnf != "" {
 		// --defaults-file は mysqld の第1引数でなければならない。
 		defaults = "--defaults-file=" + e.cfg.ExtraCnf + " " + defaults

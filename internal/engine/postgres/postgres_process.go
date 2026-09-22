@@ -81,13 +81,13 @@ func pgSize(s string) string {
 	switch unit {
 	case "", "b":
 		return num + "B"
-	case "k", "kb":
+	case "k", "kb", "kib":
 		return num + "kB"
-	case "m", "mb":
+	case "m", "mb", "mib":
 		return num + "MB"
-	case "g", "gb":
+	case "g", "gb", "gib":
 		return num + "GB"
-	case "t", "tb":
+	case "t", "tb", "tib":
 		return num + "TB"
 	default:
 		return t
@@ -129,7 +129,7 @@ func (e *Engine) stopProcess(ctx context.Context, ins engine.Instance) error {
 		return nil
 	}
 	return e.runProcess(ctx, "stop", "-D", ins.DataDir, "-m", "fast", "-w",
-		"-t", strconv.Itoa(int(e.cfg.ReadyTimeout.Seconds())))
+		"-t", strconv.Itoa(int(e.cfg.StopTimeout.Seconds())))
 }
 
 // killProcess は immediate shutdown。dirty state を捨てる rollback 直前用で、
@@ -142,7 +142,7 @@ func (e *Engine) killProcess(ctx context.Context, ins engine.Instance) error {
 	// 備えて、消えるまで少しだけ待つ(datadir を掴んだままの rollback を避ける)。
 	_ = e.runProcess(ctx, "stop", "-D", ins.DataDir, "-m", "immediate", "-w", "-t", "10")
 	if !e.waitGone(ins, 10*time.Second) {
-		if pid, ok := e.readPid(ins); ok {
+		if pid, ok := e.readPid(ins); ok && e.isRunningProcess(ins) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			e.waitGone(ins, 5*time.Second)
 		}
@@ -156,8 +156,15 @@ func (e *Engine) isRunningProcess(ins engine.Instance) bool {
 	if !ok {
 		return false
 	}
-	// シグナル 0 は存在確認だけ行う。
-	return syscall.Kill(pid, 0) == nil
+	// シグナル 0 は存在確認だけ行う。pid を別プロセスが再利用していたら
+	// running とみなさない(再起動後の stale postmaster.pid、#302)。
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	if match, known := engine.ProcessIs(pid, "postgres", "postmaster"); known && !match {
+		return false
+	}
+	return true
 }
 
 // readPid は postmaster.pid の 1 行目(PID)を読む。

@@ -57,7 +57,8 @@ func usage() int {
   sashiki drain
   sashiki version
 
-非同期な変更(create/delete/reset/recreate/retry、baseline refresh|promote)は既定で完了まで待つ。
+非同期な変更(create/delete/reset/recreate/retry、baseline build|validate)は既定で完了まで待つ。
+  baseline refresh は開始だけ返す(進捗は sashiki baseline list)。baseline promote は同期。
   --no-wait で待たずに operation を返す / --timeout <dur> / --interval <dur> で待機を調整。
 `)
 	return exitUsage

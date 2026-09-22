@@ -98,10 +98,17 @@ func loopbackHost(hostport string) bool {
 //     トークン認証で来る非 loopback の API クライアントには影響しない)
 //
 // を強制する。ダメなら 403 を書いて false を返す。
+//
+// Bearer トークンで認証された要求は、同一オリジン(Origin のホスト == Host)も
+// 許可する(#301)。トークンはブラウザが自動では送らないヘッダなので CSRF にならず、
+// DNS リバインディングの攻撃ページは別オリジンでトークンを持てない。これで
+// Web UI を SSH トンネル以外(trust_loopback: false の内部公開)でも使える。
 func (s *Server) browserSafe(w http.ResponseWriter, r *http.Request) bool {
+	tokenAuth := callerOf(r).Name != "" && callerOf(r).Name != "loopback"
 	if o := r.Header.Get("Origin"); o != "" {
 		u, err := url.Parse(o)
-		if err != nil || !loopbackHost(u.Host) {
+		sameOrigin := err == nil && tokenAuth && strings.EqualFold(u.Host, r.Host)
+		if err != nil || (!loopbackHost(u.Host) && !sameOrigin) {
 			writeErr(w, http.StatusForbidden, "cross_origin_denied",
 				"cross-site browser requests are not allowed for the data browser")
 			return false

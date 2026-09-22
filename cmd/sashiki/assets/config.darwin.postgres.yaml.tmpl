@@ -2,9 +2,11 @@
 # sashiki init --platform darwin --engine postgres が生成。
 # storage=apfs(clonefile), engine=process(postgres 直起動 / systemd 不要)。
 listen:
-  api: "127.0.0.1:8080"     # Web UI もここ (GET /)
+  # MySQL 版(8080 / 9100)と同時に常駐できるよう 1 つずらす(#304)。
+  # CLI は SASHIKI_API_URL=http://127.0.0.1:8081 で向ける。
+  api: "127.0.0.1:8081"     # Web UI もここ (GET /)
   proxy: "127.0.0.1:5432"   # dev@<branch> でルーティング(#222)
-  metrics: "127.0.0.1:9100"
+  metrics: "127.0.0.1:9101"
 
 state_db: {{.Root}}/state.db
 run_dir: {{.Root}}/run

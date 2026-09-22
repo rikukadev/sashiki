@@ -255,12 +255,17 @@ log "process モード: systemd 無しで起動する (#227)"
 # 差し替えて pg_ctl 直起動を検証する(macOS/コンテナで使う経路の本質は同じ)。
 kill $SASHIKID_PID 2>/dev/null || true
 for _ in $(seq 1 20); do curl -sf http://127.0.0.1:8090/v1/healthz >/dev/null 2>&1 || break; sleep 0.3; done
-sed -i 's/^    sudo: false$/    sudo: false\n    mode: process\n    run_user: postgres/' /etc/sashiki-pg/config.yaml
-grep -q "mode: process" /etc/sashiki-pg/config.yaml || fail "config に mode: process を入れられなかった"
+# 注入の目印は engine.postgres 節にしか無い行を使う。`sudo: false` は
+# storage.zfs にも居るので、それを目印にすると両方に入ってしまい、
+# zfs 側の `mode` は未知キーとして起動時に弾かれる(#300 の strict 化以降)。
+sed -i 's/^    app_pass: dev$/    app_pass: dev\n    mode: process\n    run_user: postgres/' /etc/sashiki-pg/config.yaml
+[ "$(grep -c 'mode: process' /etc/sashiki-pg/config.yaml)" = "1" ] \
+  || fail "config への mode: process の注入が 1 箇所になっていない"
 /usr/local/bin/sashikid-pg --config /etc/sashiki-pg/config.yaml > /var/log/sashiki-pg/sashikid-process.log 2>&1 &
 SASHIKID_PID=$!
 for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null 2>&1 && break; sleep 0.5; done
-curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null || fail "process モードで sashikid が起動しない"
+curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null \
+  || { tail -40 /var/log/sashiki-pg/sashikid-process.log; fail "process モードで sashikid が起動しない"; }
 
 time sashiki-pg create pg-proc \
   || { echo "--- postgres server log ---"; tail -30 /var/log/sashiki/postgres-pg-proc.log 2>/dev/null; \

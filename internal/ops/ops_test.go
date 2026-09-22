@@ -133,3 +133,45 @@ func TestRunSyncPreservesErrorType(t *testing.T) {
 		t.Errorf("RunSync should return the original error unwrapped: %v", err)
 	}
 }
+
+// 同じ対象の排他 operation は実行中なら ErrInProgress。終われば次を受け付ける(#303)。
+func TestStartExclusiveRejectsConcurrentSameTarget(t *testing.T) {
+	r := New(newStore(t))
+	release := make(chan struct{})
+	id, err := r.StartExclusive("reset", "pr-1", func(context.Context) error { <-release; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy, err := r.StartExclusive("delete", "pr-1", func(context.Context) error { return nil })
+	if !errors.Is(err, ErrInProgress) || busy != id {
+		t.Fatalf("second op on same target: id=%q err=%v, want ErrInProgress with %q", busy, err, id)
+	}
+	if _, err := r.StartExclusive("reset", "pr-2", func(context.Context) error { return nil }); err != nil {
+		t.Errorf("other target must not be blocked: %v", err)
+	}
+	close(release)
+	if _, err := r.Wait(context.Background(), id, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	// Wait が completed を返した直後(Drain を挟まない)でも次の操作を受け付ける。
+	// CLI の --wait → 次のコマンド、の間に 409 が挟まらないこと。
+	if _, err := r.StartExclusive("delete", "pr-1", func(context.Context) error { return nil }); err != nil {
+		t.Errorf("right after completion the target should accept a new op: %v", err)
+	}
+}
+
+// Drain は実行中の operation を待ち、timeout で諦める。
+func TestDrainWaitsForRunningOps(t *testing.T) {
+	r := New(newStore(t))
+	release := make(chan struct{})
+	if _, err := r.Start("create", "pr-1", func(context.Context) error { <-release; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if r.Drain(20 * time.Millisecond) {
+		t.Error("drain must not report done while an op is running")
+	}
+	close(release)
+	if !r.Drain(time.Second) {
+		t.Error("drain should finish after the op completes")
+	}
+}

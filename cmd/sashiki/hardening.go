@@ -33,7 +33,7 @@ func sudoersContent(pool string) string {
 	base := pool + "/base"
 	br := pool + "/branches"
 	lines := []string{
-		"# sashiki: 限定的な root 操作のみ許可(sashiki init が生成。root-helper 化は v0.3 #78)",
+		"# sashiki: 限定的な root 操作のみ許可(sashiki init が生成。root-helper 化は #276)",
 		"# 実呼び出し形は internal/storage/ebszfs/zfs.go / internal/engine/{mysql,postgres} を参照。",
 		"# 注意: sudoers の * は空白をまたぐため、末尾パターンによる制限は完全ではない。",
 		// clone: baseline snapshot → branches 配下のみ(引数 2 個の固定形)。

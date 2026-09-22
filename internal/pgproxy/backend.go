@@ -16,12 +16,13 @@ import (
 //
 // pg_hba.conf の設定によって trust / password / md5 / scram-sha-256 の
 // いずれかが来るので、すべてに応答できるようにしておく。
-func authenticateBackend(backend net.Conn, user, database, password string) error {
-	params := map[string]string{"user": user}
-	if database != "" {
-		params["database"] = database
-	}
-	if err := writeStartup(backend, params); err != nil {
+//
+// clientParams はクライアントの StartupMessage。user(<user>@<branch>)は app ロールに
+// 差し替え、それ以外(database / application_name / client_encoding / DateStyle /
+// TimeZone / options …)はそのまま渡す。以前は user と database しか渡さず、
+// 監視・プーラー・ORM が前提にする設定が黙って落ちていた(#305)。
+func authenticateBackend(backend net.Conn, user string, clientParams map[string]string, password string) error {
+	if err := writeStartup(backend, backendStartupParams(user, clientParams)); err != nil {
 		return fmt.Errorf("send startup: %w", err)
 	}
 
@@ -111,4 +112,17 @@ func md5Token(password, user string, salt []byte) string {
 	inner := md5.Sum([]byte(password + user))
 	outer := md5.Sum(append([]byte(hex.EncodeToString(inner[:])), salt...))
 	return "md5" + hex.EncodeToString(outer[:])
+}
+
+// backendStartupParams は backend に送る StartupMessage のパラメータを作る(#305)。
+func backendStartupParams(appUser string, clientParams map[string]string) map[string]string {
+	params := make(map[string]string, len(clientParams))
+	for k, v := range clientParams {
+		params[k] = v
+	}
+	params["user"] = appUser
+	if params["database"] == "" {
+		delete(params, "database")
+	}
+	return params
 }

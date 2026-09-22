@@ -16,7 +16,7 @@
 ## 不変条件(壊さないこと)
 
 - **@init / @baseline スナップショットは必ず mysqld の正常終了状態でのみ取得する**
-- storage / engine の実装依存をコア(internal/branch)に持ち込まない
+- storage / engine の実装依存をコア(internal/workspace)に持ち込まない
 - 自社固有処理はコアに入れず hooks に置く
 
 ## ブランチ運用

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -156,6 +157,8 @@ func main() {
 			MysqldBin: cfg.Engine.Mysql.MysqldBin,
 			RunUser:   cfg.Engine.Mysql.RunUser,
 			ExtraCnf:  cfg.Engine.Mysql.ExtraCnf,
+			// 見積もり(admission)と実際の mysqld を同じ値にする(#299)。
+			BufferPoolBytes: parseSize(cfg.Engine.Mysql.BufferPoolSize),
 		})
 	}
 
@@ -192,6 +195,7 @@ func main() {
 		IdleStopAfter:      cfg.Branches.IdleStopAfter,
 		DeleteAfterIdle:    cfg.Branches.DeleteAfterIdle,
 		OperationRetention: cfg.Branches.OperationRetention,
+		ErrorRetention:     cfg.Branches.ErrorRetention,
 		Profiles:           profilePolicies(cfg.Branches.Profiles),
 		DefaultProfile:     cfg.Branches.DefaultProfile,
 		AvailableMem:       availableMem,
@@ -256,6 +260,14 @@ func main() {
 	go mgr.RunConnPoller(ctx, cfg.Branches.ReaperInterval)
 
 	if cfg.Listen.Metrics != "" {
+		// metrics は認証を持たない(Prometheus の scrape 前提)。ブランチ名・容量・
+		// メモリが見えるので、loopback 以外で開くなら到達元をネットワークで絞る(#301)。
+		if host, _, err := net.SplitHostPort(cfg.Listen.Metrics); err == nil {
+			if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+				log.Printf("sashikid: 警告 listen.metrics=%s は認証なしで loopback 以外に開いています。"+
+					"ブランチ名・容量が見えるので SG / ファイアウォールで到達元を絞ってください", cfg.Listen.Metrics)
+			}
+		}
 		go func() {
 			mux := http.NewServeMux()
 			mux.Handle("GET /metrics", api.MetricsHandler(mgr))
@@ -333,7 +345,19 @@ func main() {
 	if err := srv.Listen(ctx, cfg.Listen.API); err != nil {
 		log.Fatal(err)
 	}
+	// 停止時は実行中の operation(create / reset / recreate / delete …)を待つ(#303)。
+	// 待たずに終わると途中で死に、次回起動で interrupted → 手動 retry / delete に
+	// なっていた。sashikid.service の TimeoutStopSec はこれより長くしてある。
+	if r := srv.Ops(); r != nil {
+		log.Printf("sashikid: waiting for in-flight operations (up to %s)", drainTimeout)
+		if !r.Drain(drainTimeout) {
+			log.Printf("sashikid: operations still running after %s; they will be marked interrupted on next start", drainTimeout)
+		}
+	}
 }
+
+// drainTimeout は停止時に実行中の operation を待つ上限(#303)。
+const drainTimeout = 10 * time.Minute
 
 // slogWriter は既存の log.Printf 出力を slog(JSON)へ橋渡しする。
 type slogWriter struct{}

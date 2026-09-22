@@ -51,6 +51,9 @@ type Branch struct {
 	EngineState  string // mysqld の期待状態(running|stopped。空 = 不明/遷移中)
 	InitSnapshot string // reset の戻り先 @init(空なら <dataset>@init を組み立てる)
 	VolumeRef    string // backend 固有の volume 識別子(dataset 名など)
+	// ErrorAt は error 状態になった時刻(#298)。reaper の error_retention の起点。
+	// 旧行や error 以外では nil。
+	ErrorAt *time.Time
 }
 
 // HookRun は hook 実行記録。
@@ -94,7 +97,8 @@ func Open(path string) (*DB, error) {
 		"ALTER TABLE branches ADD COLUMN engine_state TEXT",
 		"ALTER TABLE branches ADD COLUMN init_snapshot TEXT",
 		"ALTER TABLE branches ADD COLUMN volume_ref TEXT",
-		"ALTER TABLE tokens ADD COLUMN scope TEXT", // #294: NULL は admin(旧トークン互換)
+		"ALTER TABLE branches ADD COLUMN error_at TEXT", // #298
+		"ALTER TABLE tokens ADD COLUMN scope TEXT",      // #294: NULL は admin(旧トークン互換)
 		"ALTER TABLE baselines ADD COLUMN source_revision TEXT",
 		"ALTER TABLE baselines ADD COLUMN schema_revision TEXT",
 		"ALTER TABLE baselines ADD COLUMN data_as_of TEXT",
@@ -165,7 +169,8 @@ CREATE TABLE IF NOT EXISTS branches (
   expires_at       TEXT,
   engine_state     TEXT,
   init_snapshot    TEXT,
-  volume_ref       TEXT
+  volume_ref       TEXT,
+  error_at         TEXT
 );
 CREATE TABLE IF NOT EXISTS hook_runs (
   id          INTEGER PRIMARY KEY,
@@ -255,8 +260,9 @@ func (d *DB) SetState(name, st, errMsg string) error {
 		     WHEN 'running' THEN 'running'
 		     WHEN 'sleeping' THEN 'stopped'
 		     ELSE engine_state END,
-		   failed_operation = NULL, error_code = NULL, recoverable = NULL, suggested_actions = NULL
-		 WHERE name = ?`, st, errMsg, st, name)
+		   failed_operation = NULL, error_code = NULL, recoverable = NULL, suggested_actions = NULL,
+		   error_at = CASE WHEN ? = 'error' THEN COALESCE(error_at, ?) ELSE NULL END
+		 WHERE name = ?`, st, errMsg, st, st, time.Now().UTC().Format(timeFmt), name)
 	if err != nil {
 		return err
 	}
@@ -280,8 +286,9 @@ func (d *DB) SetError(name, failedOp, code string, recoverable bool, msg string,
 	}
 	res, err := d.sql.Exec(
 		`UPDATE branches SET state = ?, error_message = ?, failed_operation = ?,
-		   error_code = ?, recoverable = ?, suggested_actions = ? WHERE name = ?`,
-		StateError, msg, failedOp, code, rec, sug, name)
+		   error_code = ?, recoverable = ?, suggested_actions = ?,
+		   error_at = COALESCE(error_at, ?) WHERE name = ?`,
+		StateError, msg, failedOp, code, rec, sug, time.Now().UTC().Format(timeFmt), name)
 	if err != nil {
 		return err
 	}
@@ -290,6 +297,20 @@ func (d *DB) SetError(name, failedOp, code string, recoverable bool, msg string,
 		return ErrNotFound
 	}
 	return nil
+}
+
+// MarkErrorAtIfMissing は error 状態で error_at が無い行(#298 以前に error に
+// なったもの)に現在時刻を入れる。retention をアップグレード時点から数えるため。
+func (d *DB) MarkErrorAtIfMissing(name string) error {
+	_, err := d.sql.Exec(`UPDATE branches SET error_at = ? WHERE name = ? AND state = ? AND error_at IS NULL`,
+		time.Now().UTC().Format(timeFmt), name, StateError)
+	return err
+}
+
+// SetErrorAtForTest はテスト用に error_at を書き換える。
+func (d *DB) SetErrorAtForTest(name string, t time.Time) error {
+	_, err := d.sql.Exec(`UPDATE branches SET error_at = ? WHERE name = ?`, t.UTC().Format(timeFmt), name)
+	return err
 }
 
 // TouchLastConn は最終接続時刻を更新する。
@@ -347,7 +368,7 @@ func (d *DB) GetBranch(name string) (Branch, error) {
 		`SELECT name, state, port, origin_snapshot, created_at, last_conn_at, COALESCE(error_message,''),
 		        failed_operation, error_code, recoverable, suggested_actions,
 		        profile, owner, purpose, source, expires_at,
-		        engine_state, init_snapshot, volume_ref
+		        engine_state, init_snapshot, volume_ref, error_at
 		 FROM branches WHERE name = ?`, name)
 	return scanBranch(row)
 }
@@ -358,7 +379,7 @@ func (d *DB) ListBranches() ([]Branch, error) {
 		`SELECT name, state, port, origin_snapshot, created_at, last_conn_at, COALESCE(error_message,''),
 		        failed_operation, error_code, recoverable, suggested_actions,
 		        profile, owner, purpose, source, expires_at,
-		        engine_state, init_snapshot, volume_ref
+		        engine_state, init_snapshot, volume_ref, error_at
 		 FROM branches ORDER BY created_at`)
 	if err != nil {
 		return nil, err
@@ -402,11 +423,11 @@ func scanBranch(row scannable) (Branch, error) {
 	var failedOp, errCode, sug sql.NullString
 	var rec sql.NullInt64
 	var profile, owner, purpose, source, expires sql.NullString
-	var engineState, initSnap, volRef sql.NullString
+	var engineState, initSnap, volRef, errorAt sql.NullString
 	err := row.Scan(&b.Name, &b.State, &b.Port, &b.OriginSnapshot, &created, &lastConn, &b.ErrorMessage,
 		&failedOp, &errCode, &rec, &sug,
 		&profile, &owner, &purpose, &source, &expires,
-		&engineState, &initSnap, &volRef)
+		&engineState, &initSnap, &volRef, &errorAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return b, ErrNotFound
 	}
@@ -437,6 +458,11 @@ func scanBranch(row scannable) (Branch, error) {
 	if lastConn.Valid {
 		if t, err := time.Parse(timeFmt, lastConn.String); err == nil {
 			b.LastConnAt = &t
+		}
+	}
+	if errorAt.Valid {
+		if t, err := time.Parse(timeFmt, errorAt.String); err == nil {
+			b.ErrorAt = &t
 		}
 	}
 	return b, nil

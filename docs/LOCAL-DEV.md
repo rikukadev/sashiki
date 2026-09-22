@@ -6,7 +6,11 @@ sashiki はこれに向いている。worktree 1 本 = DB ブランチ 1 本(同
 
 ## 構成
 
-sashiki は **ZFS + systemd(Linux カーネル)が必須**なので、macOS では **Lima のフル VM** の中で
+> **まず [VM を使わない経路](#vm-を使わない経路正式サポート113) を検討する。** macOS ネイティブ
+> (APFS clonefile + mysqld 直起動)とコンテナ(XFS reflink)が正式サポートで、多くの用途はそれで足りる。
+> この節の Lima 構成は「本番と同じ ZFS + systemd を手元で再現したい」ときのもの。
+
+Lima 構成は ZFS + systemd(Linux カーネル)を使うので、macOS では **Lima のフル VM** の中で
 動かす。アプリ側(OrbStack のコンテナや Mac ホストのプロセス)は VM の MySQL に TCP で繋ぐ。
 
 ```
@@ -63,7 +67,7 @@ CLI で create する必要すらない。各 worktree の `.envrc`(direnv)に�
 export DB_HOST=host.docker.internal   # OrbStack のコンテナから。Mac host 直なら 127.0.0.1
 export DB_PORT=3306
 export DB_USER="dev@$(git branch --show-current | tr '/' '-' | cut -c1-32)"
-export DB_PASSWORD=dev                # ローカル既定。config の proxy_pass を変えたら合わせる
+export DB_PASSWORD=dev                # ローカル既定。config の app_pass を変えたら合わせる
 ```
 
 - branch 名は sashiki の `name_pattern`(`^[a-z0-9-]{1,32}$`)に合わせて整形している(`/`→`-`、32 文字まで)。
@@ -87,7 +91,7 @@ CLI は VM 内の API(loopback)を叩くのでトークン不要。Mac から直
 
 - **OrbStack のコンテナ**から: `host.docker.internal:3306`(OrbStack は host.docker.internal を Mac host に解決する)。
 - **Mac host のプロセス**(`go run` など)から: `127.0.0.1:3306`(Lima の port-forward 先)。
-- ユーザーは `dev@<branch>`、パスワードは config の `proxy_pass`(既定 `dev`)。
+- ユーザーは `dev@<branch>`、パスワードは config の `app_pass`(Lima 内で `sashiki init` した場合はランダム生成。`--app-pass dev` で固定できる)。
 
 ## 後片付け
 
@@ -101,7 +105,7 @@ limactl delete -f sashiki-dev # VM ごと破棄
 - **向く**: baseline が大きい(数十 GB)、worktree を何本も並行、migration を実データで試す、reset を多用する。
 - **向かない(Docker で十分)**: 軽い MySQL が 1 個欲しいだけ。その場合は素の container の方が VM 不要で楽。
 
-判断の目安は [README の損益分岐](../README.md) と [docs/COSTS.md](COSTS.md) を参照。
+判断の目安は [docs/COSTS.md](COSTS.md) を参照。
 
 ## VM を使わない経路(正式サポート、#113)
 
@@ -151,8 +155,8 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 3306   # proxy 経由。未知ブラン�
 
 > **per-branch quota の注意(#200)**: apfs / reflink には ZFS の refquota に相当する
 > per-branch quota が無いため、`storage.default_storage_quota` は効かない。1 ブランチの
-> 暴走に対する storage admission は **pool 使用率の watermark(high/critical)だけ**になる。
-> Mac は個人用途なので通常は問題ないが、共有マシンで使うなら空き容量に余裕を持たせること。
+> 暴走を止める仕組みは無い。**pool 使用率の watermark も効かない**(apfs / reflink は使用量を
+> 報告しないため)。Mac は個人用途なので通常は問題ないが、共有マシンで使うなら空き容量に余裕を持たせること。
 
 ### process モードと実行ユーザー(`run_user`)
 
@@ -186,20 +190,23 @@ engine:
     app_pass: dev
 ```
 
-baseline は `sashiki baseline import --from dump.sql --db app --config <root>/config.yaml`
-で作れる(プレーン SQL / `pg_dump` のカスタム形式・ディレクトリ形式に対応)。
+baseline は `sashiki baseline import --from dump.sql --db app`
+で作れる(config は `~/Library/Application Support/sashiki-pg/config.yaml` を自動で使う。
+MySQL 版の config も併存するなら `--config` か `SASHIKI_CONFIG` で指定する)(プレーン SQL / `pg_dump` のカスタム形式・ディレクトリ形式に対応)。
 接続は `listen.proxy` を設定すれば `psql -U 'dev@pr-1'` の固定エンドポイント経由、
 未設定ならブランチごとの直ポート(`sashiki show <name>`)。
 
 一括セットアップは **`sashiki init --platform darwin --engine postgres`**(#238)。
 Homebrew の postgresql を検出(版は数値順で最新)→ `initdb` → 接続ロール `dev` と
 `app` データベース作成 → 正常終了 → clonefile で baseline 取得 → config 生成 →
-launchd 常駐(ラベル `dev.sashiki.sashikid-pg` なので MySQL 版と共存できる)。
+launchd 常駐。ラベル `dev.sashiki.sashikid-pg`、API `:8081`、metrics `:9101` で、
+MySQL 版(`:8080` / `:9100`、proxy `:3306`)と同時に常駐できる(#304)。CLI はどちらの
+sashikid を操作するかを `SASHIKI_API_URL` で選ぶ(既定は MySQL 版の `:8080`)。
 
 ```bash
 brew install postgresql@17
 sashiki init --platform darwin --engine postgres --yes
-export SASHIKI_API_URL=http://127.0.0.1:8080
+export SASHIKI_API_URL=http://127.0.0.1:8081
 PGPASSWORD=dev psql -h 127.0.0.1 -p 5432 -U 'dev@pr-1' -d app   # 未作成でも接続時に生える
 ```
 

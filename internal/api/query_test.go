@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -281,5 +282,32 @@ func TestQuerySchemaRequireAuthFromNonLoopback(t *testing.T) {
 		if w.Code != 401 {
 			t.Errorf("%s without token should be 401, got %d", path, w.Code)
 		}
+	}
+}
+
+// トークン認証なら同一オリジンの UI からデータブラウザを使える。loopback 無認証の
+// 同一オリジン(DNS リバインディング)は従来どおり拒否(#301)。
+func TestBrowserSafeAllowsSameOriginWithToken(t *testing.T) {
+	s := &Server{}
+	mk := func(caller string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "http://sashiki.internal:8080/v1/branches/x/schema", nil)
+		r.Host = "sashiki.internal:8080"
+		r.Header.Set("Origin", "http://sashiki.internal:8080")
+		r.RemoteAddr = "10.0.0.5:1"
+		if caller != "" {
+			r = r.WithContext(context.WithValue(r.Context(), principalKey{}, principal{Name: caller, Scope: state.ScopeAdmin}))
+		}
+		return r
+	}
+	if !s.browserSafe(httptest.NewRecorder(), mk("ops")) {
+		t.Error("token-authenticated same-origin request should be allowed")
+	}
+	if s.browserSafe(httptest.NewRecorder(), mk("loopback")) {
+		t.Error("loopback-exempt same-origin (non-localhost) must still be rejected")
+	}
+	r := mk("ops")
+	r.Header.Set("Origin", "http://evil.example")
+	if s.browserSafe(httptest.NewRecorder(), r) {
+		t.Error("cross-origin must be rejected even with a token")
 	}
 }
