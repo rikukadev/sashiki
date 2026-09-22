@@ -1,4 +1,4 @@
-# 出力は Aurora / RDS モジュールと揃える。ラッパー(engine 切替)が同じ出力名で
+# 主要な出力名を Aurora / RDS モジュールに寄せる。ラッパー(engine 切替)が同じ出力名で
 # 参照できるようにする。branch_user は sashiki 固有(Aurora 側は "" を返す互換トリック)。
 
 output "endpoint" {
@@ -7,7 +7,7 @@ output "endpoint" {
 }
 
 output "reader_endpoint" {
-  description = "リーダーエンドポイント。単一ノードのため endpoint と同一(RDS 互換)"
+  description = "リーダーエンドポイント。単一ノードのため contract の形だけ揃えて endpoint と同一"
   value       = local.endpoint
 }
 

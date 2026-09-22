@@ -1,6 +1,6 @@
 # sashiki branch action
 
-PR の open/close に連動して sashiki の DB ブランチを作成・削除する composite action。
+PR の open/reopen/synchronize/close に連動して sashiki の DB ブランチを管理する composite action。
 
 ## 使い方
 
@@ -15,7 +15,7 @@ jobs:
   branch:
     runs-on: [self-hosted, vpc]   # sashikid の API に届くランナー
     steps:
-      - uses: rikukadev/sashiki/action@main
+      - uses: rikukadev/sashiki/action@v0.10.0 # x-release-please-version
         with:
           api_url: http://sashiki.internal:8080
           token: ${{ secrets.SASHIKI_API_TOKEN }}
@@ -48,7 +48,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::<account>:role/<gha-role>
           aws-region: ap-northeast-1
-      - uses: rikukadev/sashiki/action@main
+      - uses: rikukadev/sashiki/action@v0.10.0 # x-release-please-version
         with:
           transport: ssm
           instance_id: i-0123456789abcdef0
@@ -92,7 +92,7 @@ jobs:
     if: github.event.label.name == 'db-reset'
     runs-on: [self-hosted, vpc]
     steps:
-      - uses: rikukadev/sashiki/action@main
+      - uses: rikukadev/sashiki/action@v0.10.0 # x-release-please-version
         with:
           api_url: http://sashiki.internal:8080
           token: ${{ secrets.SASHIKI_API_TOKEN }}

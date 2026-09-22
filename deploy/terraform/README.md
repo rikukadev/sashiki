@@ -1,4 +1,4 @@
-# sashiki Terraform モジュール(RDS 互換インターフェース)
+# sashiki Terraform モジュール(database module contract)
 
 「RDS を選ぶところで sashiki を選べる」ことをゴールにした、1 apply で完結する
 モジュール。EC2 + データ EBS(`prevent_destroy`)+ SG + IAM + Route53 +
@@ -19,7 +19,6 @@ module "db" {
 
   instance_class    = "m6i.large"
   allocated_storage = 100
-  engine_version    = "8.0"
 
   route53_zone_id = var.internal_zone_id
   dns_name        = "db.internal.example.com"
@@ -35,8 +34,8 @@ module "db" {
 
 ## RDS / Aurora との入れ替え(ラッパーモジュール)
 
-入力・出力を Aurora / RDS モジュールと揃えてあるので、`engine` 変数で実体を
-切り替えるラッパーを書ける。`sashiki` 固有の `branch_user` は、RDS/Aurora 側では
+主要な入力・出力名を Aurora / RDS モジュールに寄せているので、`engine` 変数で実体を
+切り替える社内ラッパーを書ける。RDS API そのものとの互換性はない。`sashiki` 固有の `branch_user` は、RDS/Aurora 側では
 `""` を返す**互換トリック**で吸収する(参照側は常に同じ出力名で書ける)。
 
 ```hcl
@@ -54,7 +53,6 @@ module "sashiki" {
   allowed_sg_ids    = var.allowed_sg_ids
   instance_class    = var.instance_class
   allocated_storage = var.allocated_storage
-  engine_version    = var.engine_version
 }
 
 module "aurora" {
@@ -97,7 +95,8 @@ apply 後にサイズが戻ったら通常運用に戻る。
 ## 入力 / 出力
 
 主要な入力: `name` / `vpc_id` / `subnet_ids` / `allowed_sg_ids` /
-`instance_class` / `allocated_storage` / `engine_version`(RDS/Aurora と同名)。
+`instance_class` / `allocated_storage`。MySQL の版は AMI の apt パッケージで決まり、
+版を選ぶ入力は提供しない。
 詳細は [`variables.tf`](./variables.tf)。
 
 主要な出力: `endpoint` / `reader_endpoint` / `port` / `username` /
@@ -108,8 +107,9 @@ apply 後にサイズが戻ったら通常運用に戻る。
 
 - データ EBS は `prevent_destroy = true`。`terraform destroy` では消えない
   (故意に消すときは state から外すか lifecycle を一時的に外す)。
-- **インスタンス差し替え時もデータは残り、init が pool を再 import する**(#246)。
-  `user_data` や AMI を変えて EC2 が作り直されても、データ EBS は保持される。
+- **インスタンスを明示的に差し替えてもデータは残り、init が pool を再 import する**(#246)。
+  AMI は `ignore_changes` の対象で、`user_data` の変更も既定では in-place のため、
+  それだけでは EC2 を置換しない。`terraform apply -replace` 等で置換した場合もデータ EBS は保持される。
   新インスタンスの `sashiki init` は既存 zpool を検出して `zpool import -f` で
   再利用し(pool が無いときだけ `zpool create`)、ブランチと baseline はそのまま
   使える。`-f` はインスタンス差し替えで hostid が変わるため必要で、EBS は 1 台に
@@ -117,7 +117,9 @@ apply 後にサイズが戻ったら通常運用に戻る。
 - API トークンは SSM SecureString(`api_token_ssm_path`)。dev パスワードは
   Secrets Manager(`password_secret_arn`)。どちらも平文で state に近い形で
   持たない運用にすること(`terraform.tfstate` の暗号化・アクセス制限は前提)。
-- 単一ノード構成のため `reader_endpoint` は `endpoint` と同じ値を返す(RDS 互換)。
+- 単一ノード構成のため `reader_endpoint` は contract の形を揃える目的で `endpoint` と同じ値を返す。
+- データ EBS は暗号化を明示せず、AWS Backup / 定期 snapshot も設定しない。
+  `prevent_destroy` は復元手段ではないため、必要なら利用側で暗号化とバックアップを設計する。
 
 ## API を VPC 内から使う(`api_url` + トークン)
 
@@ -138,8 +140,8 @@ GitHub Action の `transport: api`(既定)はこの経路。runner が VPC 外�
 
 ## Web UI を手元から使う(SSM ポートフォワード)
 
-Web UI・データブラウザは Bearer トークンを送る手段を持たず loopback 無認証が前提なので、
-SSM ポートフォワードで手元に引いて使う(SSH 鍵・公開ポート不要):
+Web UI は 401 応答時にトークン入力欄を表示し、同じタブの sessionStorage にだけ保持して
+API へ Bearer トークンを送る。SSM ポートフォワードなら SSH 鍵・公開ポートなしでも使える:
 
 ```bash
 aws ssm start-session --target $(terraform output -raw instance_id) \
@@ -148,6 +150,5 @@ aws ssm start-session --target $(terraform output -raw instance_id) \
 # → ブラウザで http://localhost:8080(ブランチ一覧・データブラウザ)
 ```
 
-loopback からは無認証で全機能が使える。データブラウザは localhost 以外の Origin を
-403 で遮断するため、トンネル以外の経路では動かない(意図的な設計)。
-チーム向けに常時公開したい場合は ALB + OIDC 等のインフラ層認証を別途前段に置くこと。
+既定では loopback から無認証で全機能が使える。常時公開する場合は
+`auth.trust_loopback: false` にし、必要なら ALB + OIDC 等も前段に置くこと。
