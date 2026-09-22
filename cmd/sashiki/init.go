@@ -218,7 +218,7 @@ func initSteps(opts initOpts) []initStep {
 			},
 			run: func() error {
 				// /usr/sbin/zfs 全体は広すぎる。実呼び出し形に合わせてパス制限し、
-				// visudo -cf 検証後に本置きする(#78)。root-helper 化は v0.3。
+				// visudo -cf 検証後に本置きする(#78)。将来 root-helper 化する。
 				return installSudoers(opts.pool)
 			},
 		},

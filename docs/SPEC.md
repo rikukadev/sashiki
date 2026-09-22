@@ -801,7 +801,7 @@ auth:
 adapter の仕事は「PR #123 → branch `pr-123`」の変換と PR コメント投稿だけ。
 
 ```yaml
-- uses: rikukadev/sashiki/action@v1
+- uses: rikukadev/sashiki/action@v0.10.0 # x-release-please-version
   with:
     api_url: ${{ vars.SASHIKI_API_URL }}
     token: ${{ secrets.SASHIKI_API_TOKEN }}
@@ -850,9 +850,9 @@ module "db" {
 }
 ```
 
-sashiki が作る AWS リソース: EC2、EBS(`prevent_destroy`)、SG、IAM ロール(ebs-zfs なら SSM 読み取りのみ)、Route53 A レコード、Secrets Manager(app_user の PW)、SSM(API トークン)。**RDS / Aurora には触らない。** ebs-zfs の日常運用で sashikid は AWS API を呼ばない。
+sashiki が作る AWS リソース: EC2、EBS(`prevent_destroy`)、SG、IAM ロール(ebs-zfs なら SSM 読み取りのみ)、Secrets Manager(app_user の PW)、SSM(API トークン)。`route53_zone_id` と `dns_name` を両方指定したときだけ Route53 A レコードも作る。**RDS / Aurora には触らない。** ebs-zfs の日常運用で sashikid は AWS API を呼ばない。
 
-DNS は「VPC 内から解決できて sashiki ホストに向く」なら何でもよい。`hostname` は変数、既定は `${name}.sashiki.internal`。
+DNS は「VPC 内から解決できて sashiki ホストに向く」なら何でもよい。Route53 を指定しない場合、Terraform の `endpoint` は EC2 の private IP を返す。
 
 -----
 

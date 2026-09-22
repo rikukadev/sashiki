@@ -14,12 +14,15 @@ PR プレビュー・CI・開発者 sandbox・マイグレーション検証—�
 
 ```console
 $ sashiki create pr-123
-branch 'pr-123' ready: mysql -udev@pr-123 -h sashiki.internal -P3306
+branch 'pr-123' ready
+$ mysql -udev@pr-123 -h 127.0.0.1 -P3306   # sashiki ホスト上から接続
 
 $ sashiki reset  pr-123    # 壊しても数秒で作成時点に戻る
 $ sashiki recreate pr-123  # main が進んだら最新 baseline から作り直す
 $ sashiki delete pr-123    # 用が済んだら消す
 ```
+
+API が返す接続先は config の `domain` なので、クライアントから解決できる名前または IP を設定する。Terraform は Route53 未指定時に private IP、macOS init は `sashiki.local` を使う(`.local` の mDNS と衝突する環境では変更する)。
 
 - 複製は **CoW なのでコピーしない**。クローン直後のディスク消費は数百 KB
 - ブランチは完全に分離。`DROP TABLE` しても他ブランチとベースは無傷
@@ -36,7 +39,7 @@ $ sashiki delete pr-123    # 用が済んだら消す
 
 | 用途 | profile | 使い方 |
 |---|---|---|
-| **PR プレビュー環境** | `preview` | GitHub Action が PR open で create / close で delete |
+| **PR プレビュー環境** | `preview` | GitHub Action が PR open/reopen/synchronize で create / close で delete |
 | **CI の分離 DB** | `ci` | ジョブごとに create、短い TTL で自動回収 |
 | **開発者の sandbox** | `sandbox` | 手元から `create`、長めに保持 |
 | **マイグレーション検証** | 任意 | 実データ量で ALTER を試す。壊したら `reset` |
@@ -327,7 +330,7 @@ Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したと�
 
 モジュールは MySQL 専用(Postgres を選ぶ変数は無い)で、データ EBS の暗号化指定とバックアップ(snapshot)は
 していない。`prevent_destroy` は「消えない」保証で「戻せる」保証ではないので、要るなら AWS Backup 等を別途掛ける。
-`engine_version` は RDS モジュールとの互換のために受けるだけで、現状は何にも使っていない。
+MySQL の版は AMI の apt パッケージで決まる。未使用だった `engine_version` 入力は、指定すれば版が変わるという誤解を避けるため削除した。
 
 ---
 
