@@ -275,7 +275,7 @@ sashiki delete demo
 ### B. GitHub Action(PR プレビュー)
 
 ```yaml
-- uses: rikukadev/sashiki/action@v0.10.0 # x-release-please-version
+- uses: rikukadev/sashiki/action@v0.11.0 # x-release-please-version
   with:
     api_url: ${{ vars.SASHIKI_API_URL }}
     token:   ${{ secrets.SASHIKI_API_TOKEN }}
@@ -294,7 +294,7 @@ ref はタグで固定する(`@main` は未リリースの変更を拾う)。入
 
 ```hcl
 module "db" {
-  source = "github.com/rikukadev/sashiki//deploy/terraform?ref=v0.10.0" # x-release-please-version
+  source = "github.com/rikukadev/sashiki//deploy/terraform?ref=v0.11.0" # x-release-please-version
 
   name           = "myapp-preview"
   vpc_id         = var.vpc_id

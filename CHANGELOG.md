@@ -7,6 +7,22 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.11.0](https://github.com/rikukadev/sashiki/compare/v0.10.0...v0.11.0) (2026-09-22)
+
+
+### Bug Fixes
+
+* **cli:** README監査で判明したLow不具合を修正する ([45e6f3f](https://github.com/rikukadev/sashiki/commit/45e6f3f506f373c9b1d0be0224e72dab986443bc))
+* README監査で判明したCritical不具合を修正する ([#309](https://github.com/rikukadev/sashiki/issues/309)) ([e563948](https://github.com/rikukadev/sashiki/commit/e563948a45ae8d2ee723210085a3d4149612fa4d))
+* README監査で判明したHigh不具合を修正する ([#310](https://github.com/rikukadev/sashiki/issues/310)) ([ae6ddbd](https://github.com/rikukadev/sashiki/commit/ae6ddbd343f7a977036b0a787b555a6f32d836a5))
+* README監査で判明したMedium不具合を修正する ([#312](https://github.com/rikukadev/sashiki/issues/312)) ([a87ec20](https://github.com/rikukadev/sashiki/commit/a87ec20fb8e11ea33998bb1a7e539322cfef626a))
+* **terraform:** README監査の残件を修正する ([#317](https://github.com/rikukadev/sashiki/issues/317)) ([3de32ff](https://github.com/rikukadev/sashiki/commit/3de32ff2d362c57de8d0b0f064d843f57104c60c))
+
+
+### Chores
+
+* release 0.11.0 ([b4f8bd2](https://github.com/rikukadev/sashiki/commit/b4f8bd283060c233d33b81adcad6d9aa270b2c46))
+
 ## [0.10.0](https://github.com/rikukadev/sashiki/compare/v0.9.2...v0.10.0) (2026-09-13)
 
 
