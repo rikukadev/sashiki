@@ -13,7 +13,9 @@
       "bump-patch-for-minor-pre-major": false,
       "extra-files": [
         { "type": "generic", "path": "deploy/terraform/VERSION" },
-        { "type": "generic", "path": "README.md" }
+        { "type": "generic", "path": "README.md" },
+        { "type": "generic", "path": "action/README.md" },
+        { "type": "generic", "path": "docs/SPEC.md" }
       ]
     }
   },

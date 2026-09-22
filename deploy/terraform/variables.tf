@@ -46,12 +46,6 @@ variable "root_volume_size" {
   default     = 30
 }
 
-variable "engine_version" {
-  description = "RDS / Aurora モジュールとの互換のために受ける。現状は未使用(MySQL は AMI の apt 既定版が入る)"
-  type        = string
-  default     = "8.0"
-}
-
 variable "ami_id" {
   description = "ベース AMI。空なら最新の Ubuntu 24.04 LTS(amd64)を自動解決する"
   type        = string

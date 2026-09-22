@@ -206,11 +206,9 @@ resource "aws_instance" "this" {
   }
 
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    name               = var.name
     data_device        = var.data_device_name
     data_volume_id     = aws_ebs_volume.data.id
     pool               = "tank"
-    engine_version     = var.engine_version
     proxy_user         = var.proxy_user
     github_token       = var.github_token
     sashiki_ref        = local.sashiki_ref

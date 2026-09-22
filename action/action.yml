@@ -1,5 +1,5 @@
 name: "sashiki branch"
-description: "PR の open/close に連動して sashiki の DB ブランチを作成・削除する"
+description: "PR の open/reopen/synchronize/close に連動して sashiki の DB ブランチを管理する"
 branding:
   icon: git-branch
   color: green

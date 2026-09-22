@@ -42,6 +42,12 @@ release-please（.github/workflows/release-please.yml）
 - Issue 参照は本文に `(#197)` の形で入れる（これまでの慣習どおり）。
 - 1 PR = 1 論理変更で、PR タイトルを Conventional Commits にしておくと squash マージ時に
   そのままコミットメッセージになって拾われる。
+- **squash マージでは PR タイトルの type しか見られない。** 中に `feat` を含む PR を
+  `fix:` のタイトルでマージすると patch 版になる(実際に #310 で起きた)。複数の type を
+  含む PR は**一番強い type に合わせる**か、PR 本文の末尾に `Release-As: X.Y.Z` を書いて
+  版を明示する。
+- 利用者の設定・コマンドの挙動が変わる変更は [docs/UPGRADING.md](UPGRADING.md) に
+  節を足す。CHANGELOG は「何を直したか」、UPGRADING は「上げる前に何をするか」。
 
 ## リリースする（通常）
 
