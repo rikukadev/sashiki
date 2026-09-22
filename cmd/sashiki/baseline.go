@@ -103,9 +103,13 @@ func cmdBaselinePromote(args []string) int {
 
 // cmdBaselineBuild は build 段階を実行し(既定 --wait)、candidate の snapshot を表示する(#84)。
 func cmdBaselineBuild(args []string) int {
-	_, noWait, timeout, interval, werr := extractWaitFlags(args)
+	rest, noWait, timeout, interval, werr := extractWaitFlags(args)
 	if werr != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", werr)
+		return exitUsage
+	}
+	if len(rest) > 0 {
+		fmt.Fprintf(os.Stderr, "sashiki baseline build: 余分な引数 %v\n", rest)
 		return exitUsage
 	}
 	code, data, err := call("POST", "/v1/baseline/build", nil)

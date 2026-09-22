@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -58,3 +59,36 @@ var errTest = testErr("boom")
 type testErr string
 
 func (e testErr) Error() string { return string(e) }
+
+// 終了コード 6 は「期限までに終わらなかった」だけに使う。API エラーや通信断は
+// それぞれの終了コードにする(#308 review)。
+func TestAwaitMutationExitCodes(t *testing.T) {
+	accepted := []byte(`{"operation_id":"op_1"}`)
+	restore := pollOperationFn
+	defer func() { pollOperationFn = restore }()
+
+	pollOperationFn = func(string, time.Duration, time.Duration) (string, string, error) {
+		return "running", "", fmt.Errorf("%w after 1s (operation op_1 is still running)", errWaitTimeout)
+	}
+	if _, exit := awaitMutation(accepted, false, time.Second, time.Millisecond); exit != exitTimeout {
+		t.Errorf("timeout -> %d, want %d", exit, exitTimeout)
+	}
+	pollOperationFn = func(string, time.Duration, time.Duration) (string, string, error) {
+		return "", "", &statusError{code: 404, msg: "branch not found"}
+	}
+	if _, exit := awaitMutation(accepted, false, time.Second, time.Millisecond); exit != exitNotFound {
+		t.Errorf("404 -> %d, want %d", exit, exitNotFound)
+	}
+	pollOperationFn = func(string, time.Duration, time.Duration) (string, string, error) {
+		return "", "", errTest // 通信断
+	}
+	if _, exit := awaitMutation(accepted, false, time.Second, time.Millisecond); exit != exitError {
+		t.Errorf("network error -> %d, want %d", exit, exitError)
+	}
+	pollOperationFn = func(string, time.Duration, time.Duration) (string, string, error) {
+		return "completed", "", nil
+	}
+	if done, exit := awaitMutation(accepted, false, time.Second, time.Millisecond); !done || exit != exitOK {
+		t.Errorf("completed -> done=%v exit=%d", done, exit)
+	}
+}

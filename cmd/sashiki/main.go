@@ -418,6 +418,16 @@ func cmdLease(args []string) int {
 		case "--json":
 			jsonOut = true
 		default:
+			// 未知のフラグが name を上書きすると /v1/branches/--typo/lease を
+			// 投げて 404 になる(#308 review)。
+			if strings.HasPrefix(rest[i], "-") && rest[i] != "-" {
+				fmt.Fprintf(os.Stderr, "sashiki lease: 不明なフラグ %s\n", rest[i])
+				return exitUsage
+			}
+			if name != "" {
+				fmt.Fprintf(os.Stderr, "sashiki lease: ブランチ名が複数あります(%s, %s)\n", name, rest[i])
+				return exitUsage
+			}
 			name = rest[i]
 		}
 	}
@@ -684,8 +694,17 @@ func cmdConnect(args []string) int {
 	env := os.Environ()
 	pass := os.Getenv("SASHIKI_DB_PASSWORD")
 	if b.Engine == "postgres" {
+		// psql は -d が無いとユーザー名(dev@pr-1)を DB 名として使い
+		// 「database "dev@pr-1" does not exist」で落ちる(#308 review)。
+		// baseline に作った DB 名は API が持っていないので、環境変数で受け取り、
+		// 無ければ必ず存在する postgres に繋ぐ。
+		db := os.Getenv("SASHIKI_DB_NAME")
+		if db == "" {
+			db = "postgres"
+			fmt.Fprintf(os.Stderr, "sashiki: データベース名が分からないので %q に繋ぎます(SASHIKI_DB_NAME で指定できます)\n", db)
+		}
 		client = "psql"
-		argv = []string{"psql", "-U", b.User, "-h", connectHost(b), "-p", strconv.Itoa(b.Port)}
+		argv = []string{"psql", "-U", b.User, "-h", connectHost(b), "-p", strconv.Itoa(b.Port), "-d", db}
 		if pass != "" {
 			env = append(env, "PGPASSWORD="+pass)
 		}

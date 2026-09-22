@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -66,6 +67,21 @@ func operationIDFrom(data []byte) string {
 	return r.OperationID
 }
 
+// errWaitTimeout は「期限までに operation が終わらなかった」。API エラーや通信断と
+// 区別して、終了コード 6 はこれだけに使う(#308 review)。
+var errWaitTimeout = errors.New("wait timed out")
+
+// statusError は API が非 200 を返したときのエラー。終了コードを status から決める。
+type statusError struct {
+	code int
+	msg  string
+}
+
+func (e *statusError) Error() string { return e.msg }
+
+// pollOperationFn はテストで差し替えるための間接参照。
+var pollOperationFn = pollOperation
+
 // pollOperation は operation が完了するまでポーリングし、最終 state と error を返す。
 func pollOperation(id string, timeout, interval time.Duration) (state, errText string, err error) {
 	deadline := time.Now().Add(timeout)
@@ -75,7 +91,7 @@ func pollOperation(id string, timeout, interval time.Duration) (state, errText s
 			return "", "", cerr
 		}
 		if code != http.StatusOK {
-			return "", "", fmt.Errorf("%s", apiError(data))
+			return "", "", &statusError{code: code, msg: apiError(data)}
 		}
 		var o opView
 		_ = json.Unmarshal(data, &o)
@@ -84,7 +100,7 @@ func pollOperation(id string, timeout, interval time.Duration) (state, errText s
 		}
 		time.Sleep(interval)
 	}
-	return "running", "", fmt.Errorf("wait timed out after %s (operation still running)", timeout)
+	return "running", "", fmt.Errorf("%w after %s (operation %s is still running)", errWaitTimeout, timeout, id)
 }
 
 // awaitMutation は 202 応答の operation を(既定で)待つ。
@@ -99,10 +115,20 @@ func awaitMutation(data []byte, noWait bool, timeout, interval time.Duration) (d
 		fmt.Println(opID)
 		return false, exitOK
 	}
-	st, errMsg, err := pollOperation(opID, timeout, interval)
+	st, errMsg, err := pollOperationFn(opID, timeout, interval)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
-		return false, exitTimeout
+		// 6 は「期限までに終わらなかった」だけに使う。通信断や 401 / 404 / 500 まで
+		// 6 にすると、CI が「詰まっている」と「容量不足」を区別する意味が無くなる。
+		var se *statusError
+		switch {
+		case errors.Is(err, errWaitTimeout):
+			return false, exitTimeout
+		case errors.As(err, &se):
+			return false, statusToExit(se.code)
+		default:
+			return false, exitError
+		}
 	}
 	if st != "completed" {
 		if errMsg != "" {
