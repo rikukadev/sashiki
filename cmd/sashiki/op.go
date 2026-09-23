@@ -14,14 +14,19 @@ func cmdOp(args []string) int {
 	if len(args) < 1 {
 		return usageOp()
 	}
+	// 余分な引数・未知のフラグは usage(#325)。
+	pos, perr := parseNoFlags(args[1:])
 	switch args[0] {
 	case "list":
-		return opList()
-	case "show":
-		if len(args) < 2 {
+		if perr != nil || len(pos) > 0 {
 			return usageOp()
 		}
-		return opShow(args[1])
+		return opList()
+	case "show":
+		if perr != nil || len(pos) != 1 {
+			return usageOp()
+		}
+		return opShow(pos[0])
 	case "wait":
 		if len(args) < 2 {
 			return usageOp()

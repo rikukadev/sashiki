@@ -6,6 +6,24 @@
 
 v0.x の間は API / config が固定されていないので、マイナー版で挙動が変わることがある。
 
+## 0.11.0 → 0.11.x
+
+### CLI の引数チェックが全コマンドに及ぶ(#325)
+
+0.11.0 の「未知のフラグは終了コード 2」は一部のコマンド(create / show / list / capacity /
+doctor / drain / gc / lease / baseline build)だけだった。残りも同じ扱いになる。
+
+- `token create` は未知のフラグと値無しの `--scope` をエラーにする(以前は黙って
+  `branches` で発行していた)。
+- `hooks run` / `op list` / `op show` / `baseline set` / `baseline gc` / `baseline refresh` は
+  余分な引数・未知のフラグを受けない。`env` / `connect` は未知のフラグをブランチ名として
+  API に投げない(404 → 3 ではなく 2)。
+- `show` / `reset` / `recreate` / `retry` / `sleep` / `wake` / `list` / `baseline list` は
+  create 専用のフラグ(`--port` / `--owner` / `--ttl` …)を受けない。
+- `delete --json` が使える(usage と REFERENCE が掲げていたが拒否されていた)。
+- 引数エラーの終了コードは **2** に統一(`--for` / `--prefix` の値無し、`--threads` の不正、
+  `baseline export --to` 無し、`init --engine` の不正は以前 1 だった)。
+
 ## 0.10.x → 0.11.0
 
 README 監査(#286〜#308)の修正がまとまって入る。**上げる前に config を確認する**。

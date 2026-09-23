@@ -138,7 +138,7 @@ func cmdInit(args []string) int {
 		steps = initStepsPostgres(opts)
 	default:
 		fmt.Fprintf(os.Stderr, "sashiki init: --engine %q は未対応です (mysql | postgres)\n", opts.engine)
-		return exitError
+		return exitUsage
 	}
 	// config が既にあれば app_pass は上書きしない(冪等)。表示も出さない。
 	_, statErr := os.Stat("/etc/sashiki/config.yaml")

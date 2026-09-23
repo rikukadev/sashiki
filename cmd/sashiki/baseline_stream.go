@@ -53,7 +53,7 @@ func cmdBaselineExport(args []string) int {
 	}
 	if opts.path == "" {
 		fmt.Fprintln(os.Stderr, "sashiki baseline export: --to <path|s3://...|-> が必要です")
-		return exitError
+		return exitUsage
 	}
 	cfgPath, err := requireConfigPath(opts.configPath)
 	if err != nil {
@@ -133,7 +133,7 @@ func cmdBaselineImportStream(args []string) int {
 	}
 	if opts.path == "" {
 		fmt.Fprintln(os.Stderr, "sashiki baseline import-stream: --from <path|s3://...|-> が必要です")
-		return exitError
+		return exitUsage
 	}
 	cfgPath, err := requireConfigPath(opts.configPath)
 	if err != nil {

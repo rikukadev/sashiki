@@ -236,7 +236,7 @@ func cmdBaselineImport(args []string) int {
 			n, err := strconv.Atoi(args[i])
 			if err != nil || n < 1 {
 				fmt.Fprintln(os.Stderr, "sashiki baseline import: --threads は 1 以上の整数")
-				return exitError
+				return exitUsage
 			}
 			opts.threads = n
 		default:
@@ -855,8 +855,8 @@ func chownR(root string, uid, gid uint32) error {
 // --- list (sashikid 経由) ---
 
 func cmdBaselineList(args []string) int {
-	_, _, jsonOut, err := parseFlags(args)
-	if err != nil {
+	pos, jsonOut, err := parseFlags(args)
+	if err != nil || len(pos) > 0 {
 		return usageBaseline()
 	}
 	code, data, err := call("GET", "/v1/baseline", nil)
@@ -889,7 +889,8 @@ func cmdBaselineList(args []string) int {
 }
 
 func cmdBaselineSet(args []string) int {
-	if len(args) < 1 {
+	args, err := parseNoFlags(args)
+	if err != nil || len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "Usage: sashiki baseline set <snapshot>")
 		return exitUsage
 	}
@@ -907,19 +908,19 @@ func cmdBaselineSet(args []string) int {
 }
 
 func cmdBaselineGC(args []string) int {
+	pos, opts, err := parseArgs(args, []string{"--keep-last"}, []string{"--dry-run"})
+	if err != nil {
+		return argError("baseline gc", err)
+	}
+	if len(pos) > 0 {
+		return argError("baseline gc", fmt.Errorf("余分な引数 %v", pos))
+	}
 	q := url.Values{}
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--keep-last":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "sashiki: --keep-last requires a value")
-				return exitUsage
-			}
-			i++
-			q.Set("keep_last", args[i])
-		case "--dry-run":
-			q.Set("dry_run", "true")
-		}
+	if v, ok := opts["--keep-last"]; ok {
+		q.Set("keep_last", v)
+	}
+	if opts["--dry-run"] == "true" {
+		q.Set("dry_run", "true")
 	}
 	path := "/v1/baseline/gc"
 	if len(q) > 0 {
@@ -939,6 +940,9 @@ func cmdBaselineGC(args []string) int {
 }
 
 func cmdBaselineRefresh(args []string) int {
+	if pos, err := parseNoFlags(args); err != nil || len(pos) > 0 {
+		return usageBaseline()
+	}
 	code, data, err := call("POST", "/v1/baseline/refresh", nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)

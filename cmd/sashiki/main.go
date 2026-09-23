@@ -256,45 +256,34 @@ type branchView struct {
 
 // --- commands ---
 
-func parseFlags(args []string) (pos []string, port int, jsonOut bool, err error) {
-	pos, port, jsonOut, _, err = parseFlagsKV(args)
-	return
+// parseFlags は `--json` だけを取るコマンド(list / show / reset / sleep …)用。
+// create 専用のフラグ(--port / --owner / --ttl …)は受けない(#325)。
+func parseFlags(args []string) (pos []string, jsonOut bool, err error) {
+	pos, opts, err := parseArgs(args, nil, []string{"--json"})
+	return pos, opts["--json"] == "true", err
 }
 
-// parseFlagsKV は --json / --port に加え、--owner/--purpose/--source/--profile を拾う。
+// parseFlagsKV は create 用。--json / --port に加え、--owner/--purpose/--source/--profile を拾う。
 func parseFlagsKV(args []string) (pos []string, port int, jsonOut bool, kv map[string]string, err error) {
-	kv = map[string]string{}
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch a {
-		case "--json":
-			jsonOut = true
-		case "--port":
-			if i+1 >= len(args) {
-				return nil, 0, false, nil, fmt.Errorf("--port requires a value")
-			}
-			i++
-			port, err = strconv.Atoi(args[i])
-			if err != nil {
-				return nil, 0, false, nil, fmt.Errorf("--port: %w", err)
-			}
-		case "--exist-ok":
-			kv["exist-ok"] = "true"
-		case "--owner", "--purpose", "--source", "--profile", "--ttl", "--baseline":
-			if i+1 >= len(args) {
-				return nil, 0, false, nil, fmt.Errorf("%s requires a value", a)
-			}
-			i++
-			kv[a[2:]] = args[i]
-		default:
-			// 未知のフラグを黙って位置引数として飲まない(#308)。
-			if strings.HasPrefix(a, "-") && a != "-" {
-				return nil, 0, false, nil, fmt.Errorf("unknown flag %s", a)
-			}
-			pos = append(pos, a)
+	pos, opts, err := parseArgs(args,
+		[]string{"--port", "--owner", "--purpose", "--source", "--profile", "--ttl", "--baseline"},
+		[]string{"--json", "--exist-ok"})
+	if err != nil {
+		return nil, 0, false, nil, err
+	}
+	if v, ok := opts["--port"]; ok {
+		port, err = strconv.Atoi(v)
+		if err != nil {
+			return nil, 0, false, nil, fmt.Errorf("--port: %w", err)
 		}
 	}
-	return pos, port, jsonOut, kv, nil
+	kv = map[string]string{}
+	for k, v := range opts {
+		if k != "--json" && k != "--port" {
+			kv[k[2:]] = v
+		}
+	}
+	return pos, port, opts["--json"] == "true", kv, nil
 }
 
 func cmdCreate(args []string) int {
@@ -376,10 +365,14 @@ func cmdDelete(args []string) int {
 		fmt.Fprintln(os.Stderr, "sashiki:", werr)
 		return exitUsage
 	}
-	if len(args) != 1 {
+	pos, jsonOut, err := parseFlags(args)
+	if err != nil {
+		return argError("delete", err)
+	}
+	if len(pos) != 1 {
 		return usage()
 	}
-	name := args[0]
+	name := pos[0]
 	code, data, err := call("DELETE", "/v1/branches/"+name, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
@@ -392,6 +385,11 @@ func cmdDelete(args []string) int {
 	done, exit := awaitMutation(data, noWait, timeout, interval)
 	if !done {
 		return exit
+	}
+	// usage と REFERENCE が掲げていた --json を受ける(#325: usage で拒否していた)。
+	if jsonOut {
+		fmt.Printf("{\"name\":%q,\"deleted\":true}\n", name)
+		return exitOK
 	}
 	fmt.Printf("branch '%s' deleted\n", name)
 	return exitOK
@@ -411,7 +409,7 @@ func cmdLease(args []string) int {
 		case "--for":
 			if i+1 >= len(rest) {
 				fmt.Fprintln(os.Stderr, "sashiki: --for requires a value")
-				return exitError
+				return exitUsage
 			}
 			i++
 			dur = rest[i]
@@ -460,8 +458,11 @@ func cmdLease(args []string) int {
 
 // cmdSyncBranch は同期の変更操作(sleep / wake)を実行し branch を表示する(#87)。
 func cmdSyncBranch(args []string, action string) int {
-	pos, _, jsonOut, err := parseFlags(args)
-	if err != nil || len(pos) != 1 {
+	pos, jsonOut, err := parseFlags(args)
+	if err != nil {
+		return argError(action, err)
+	}
+	if len(pos) != 1 {
 		return usage()
 	}
 	code, data, err := call("POST", "/v1/branches/"+pos[0]+"/"+action, nil)
@@ -487,10 +488,9 @@ func cmdSimpleBranch(args []string, action string) int {
 		fmt.Fprintln(os.Stderr, "sashiki:", werr)
 		return exitUsage
 	}
-	pos, _, jsonOut, err := parseFlags(args)
+	pos, jsonOut, err := parseFlags(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "sashiki:", err)
-		return exitUsage
+		return argError(action, err)
 	}
 	if len(pos) != 1 {
 		return usage()
@@ -532,10 +532,9 @@ func cmdSimpleBranch(args []string, action string) int {
 }
 
 func cmdList(args []string) int {
-	pos, _, jsonOut, err := parseFlags(args)
+	pos, jsonOut, err := parseFlags(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "sashiki:", err)
-		return exitUsage
+		return argError("list", err)
 	}
 	if len(pos) > 0 {
 		fmt.Fprintf(os.Stderr, "sashiki list: 余分な引数 %v(ブランチ 1 件は sashiki show <name>)\n", pos)
@@ -588,8 +587,11 @@ func cmdList(args []string) int {
 }
 
 func cmdShow(args []string) int {
-	pos, _, jsonOut, err := parseFlags(args)
-	if err != nil || len(pos) != 1 {
+	pos, jsonOut, err := parseFlags(args)
+	if err != nil {
+		return argError("show", err)
+	}
+	if len(pos) != 1 {
 		return usage()
 	}
 	code, data, err := call("GET", "/v1/branches/"+pos[0], nil)
@@ -642,22 +644,17 @@ func cmdShow(args []string) int {
 // 知っている値ではあるが、ここで出すと「接続情報を表示しただけ」の
 // つもりの操作がログや CI の出力に秘密を残す。
 func cmdEnv(args []string) int {
-	prefix := "DB_"
-	var pos []string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--prefix" {
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "sashiki: --prefix requires a value")
-				return exitError
-			}
-			i++
-			prefix = args[i]
-			continue
-		}
-		pos = append(pos, args[i])
+	// 未知のフラグをブランチ名として API に投げない(#325: `env --foo` が 404 → 3 だった)。
+	pos, opts, err := parseArgs(args, []string{"--prefix"}, nil)
+	if err != nil {
+		return argError("env", err)
 	}
 	if len(pos) != 1 {
 		return usage()
+	}
+	prefix := "DB_"
+	if v, ok := opts["--prefix"]; ok {
+		prefix = v
 	}
 	code, data, err := call("GET", "/v1/branches/"+pos[0], nil)
 	if err != nil || code != http.StatusOK {
@@ -677,6 +674,10 @@ func cmdEnv(args []string) int {
 }
 
 func cmdConnect(args []string) int {
+	args, err := parseNoFlags(args)
+	if err != nil {
+		return argError("connect", err)
+	}
 	if len(args) != 1 {
 		return usage()
 	}

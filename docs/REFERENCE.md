@@ -67,8 +67,11 @@ config と state.db を直接触る(sashikid 経由ではない)。
 環境変数: `SASHIKI_API_URL` / `SASHIKI_API_TOKEN`(または `~/.config/sashiki/token`)/
 `SASHIKI_CONFIG`(config の場所を上書き)/ `SASHIKI_DB_HOST` / `SASHIKI_DB_PASSWORD` / `SASHIKI_DB_NAME`(`connect` 用)。
 
-未知のフラグ・余分な引数はエラーにする(終了コード 2)。`--timeout` / `--interval` の値が
-読めないときも黙って既定に戻さずエラーにする。
+未知のフラグ・余分な引数は全コマンドでエラーにする(終了コード 2)。`--timeout` / `--interval` の値が
+読めないときも黙って既定に戻さずエラーにする。create 専用のフラグ(`--port` / `--owner` / `--ttl` …)は
+他のブランチ操作では受けない。`token create` の `--scope` は `branches` | `admin` 以外(値無し・タイポ)を
+エラーにする。引数の不足・不正(`--for` / `--prefix` の値無し、`--threads` の不正、`export` の `--to` 無し、
+`init --engine` の不正)も 2 で終了する。
 
 `sashikid` は `--config <path>` だけを取る。
 

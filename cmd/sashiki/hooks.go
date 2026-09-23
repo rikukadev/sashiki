@@ -8,11 +8,19 @@ import (
 )
 
 func cmdHooks(args []string) int {
-	if len(args) < 3 || args[0] != "run" {
+	if len(args) < 1 || args[0] != "run" {
 		fmt.Fprintln(os.Stderr, "Usage:\n  sashiki hooks run <name> <event>")
 		return exitUsage
 	}
-	name, event := args[1], args[2]
+	pos, err := parseNoFlags(args[1:])
+	if err != nil {
+		return argError("hooks run", err)
+	}
+	if len(pos) != 2 {
+		fmt.Fprintln(os.Stderr, "Usage:\n  sashiki hooks run <name> <event>")
+		return exitUsage
+	}
+	name, event := pos[0], pos[1]
 	code, data, err := call("POST", "/v1/branches/"+name+"/hooks/"+event, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)

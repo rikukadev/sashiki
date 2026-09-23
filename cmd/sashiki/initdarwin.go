@@ -32,7 +32,7 @@ func cmdInitDarwin(opts initOpts) int {
 	case "", "mysql":
 	default:
 		fmt.Fprintf(os.Stderr, "sashiki init: --engine %q は未対応です (mysql | postgres)\n", opts.engine)
-		return exitError
+		return exitUsage
 	}
 	mysqldBin, err := resolveMysqld()
 	if err != nil {
