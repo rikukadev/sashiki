@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -101,6 +102,9 @@ func (r *Runner) inheritedEnv() []string {
 	return out
 }
 
+// hookLogName は Run が書くログの命名(<branch>-<event>-<20060102T150405Z>.log)。
+var hookLogName = regexp.MustCompile(`^.+-[0-9]{8}T[0-9]{6}Z\.log$`)
+
 // pruneLogs は LogRetention より古い hook ログを消す(best-effort、#295)。
 // ローテーションが無いと create のたびに増え続ける。
 func (r *Runner) pruneLogs() {
@@ -113,7 +117,9 @@ func (r *Runner) pruneLogs() {
 	}
 	cutoff := r.now().Add(-r.LogRetention)
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
+		// 自分が書いた <branch>-<event>-<UTC 時刻>.log だけを対象にする(#327:
+		// hooks.log_dir を log_dir と同じにすると postgres の process ログまで消えていた)。
+		if e.IsDir() || !hookLogName.MatchString(e.Name()) {
 			continue
 		}
 		if info, err := e.Info(); err == nil && info.ModTime().Before(cutoff) {

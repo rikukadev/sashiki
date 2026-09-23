@@ -205,6 +205,8 @@ type Hooks struct {
 	Dir     string        `yaml:"dir"`
 	LogDir  string        `yaml:"log_dir"`
 	Timeout time.Duration `yaml:"timeout"`
+	// LogRetention は hook ログを残す期間(既定 30 日、負の値で削除しない、#327)。
+	LogRetention time.Duration `yaml:"log_retention"`
 }
 
 // Auth は認証設定。

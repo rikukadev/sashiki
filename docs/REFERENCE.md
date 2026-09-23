@@ -144,7 +144,7 @@ hooks dir(`hooks.dir`)に置いた実行ファイル名がイベント名にな�
 
 hook は sashikid と同じユーザー・環境で走る(API トークンだけは渡さない)。
 タイムアウトは `hooks.timeout`(既定 10 分)。ログは `<hooks.log_dir>/<branch>-<event>-<時刻>.log` に
-30 日残る。`on-reset` / `on-delete` の失敗は記録して続行する。
+`hooks.log_retention`(既定 30 日、負の値で削除しない)の間残る。`on-reset` / `on-delete` の失敗は記録して続行する。
 
 ## GitHub Action
 

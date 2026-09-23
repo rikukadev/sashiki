@@ -17,6 +17,7 @@ package pgproxy
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"github.com/rikukadev/sashiki/internal/authlimit"
 	"io"
@@ -159,7 +160,9 @@ func (s *Server) verifyClient(ctx context.Context, src string, client net.Conn) 
 		return ctx.Err(), true
 	}
 	if err := s.verifyClientSCRAM(client); err != nil {
-		s.limiter.Fail(src)
+		if errors.Is(err, errPasswordMismatch) {
+			s.limiter.Fail(src)
+		}
 		return err, true
 	}
 	s.limiter.Reset(src)
