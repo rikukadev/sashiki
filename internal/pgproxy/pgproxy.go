@@ -146,6 +146,26 @@ func (s *Server) handle(ctx context.Context, client net.Conn) {
 	}
 }
 
+// verifyClient は authlimit のスロットを取って SCRAM を検証する。スロットは
+// 検証中だけ保持し、結果に応じて Fail / Reset してから返す。admitted=false は
+// 同時試行の上限超過(検証していない)。
+func (s *Server) verifyClient(ctx context.Context, src string, client net.Conn) (err error, admitted bool) {
+	if !s.limiter.Acquire(src) {
+		return nil, false
+	}
+	defer s.limiter.Release(src)
+	authlimit.Sleep(ctx, s.limiter.Penalty(src))
+	if ctx.Err() != nil {
+		return ctx.Err(), true
+	}
+	if err := s.verifyClientSCRAM(client); err != nil {
+		s.limiter.Fail(src)
+		return err, true
+	}
+	s.limiter.Reset(src)
+	return nil, true
+}
+
 // fatal は ErrorResponse を送って接続を切る。
 func fatal(c net.Conn, sqlstate, msg string) error {
 	_ = writeMessage(c, msgErrorResponse, buildError(sqlstate, msg))
@@ -187,20 +207,19 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	// 認証終端: app パスワードで検証する。ここを通るまで branch に触れない。
 	// 総当たり対策(#297): 同一接続元の同時試行を絞り、失敗が続いていれば
 	// 検証の前に待たせる(検証後に遅らせるだけだと並列接続で迂回できる)。
+	// スロットは検証の間だけ握る(#318: defer で pipe() の終わりまで握っていたため、
+	// 同じ IP からの同時セッションが 8 本で頭打ちになっていた)。
 	src := authlimit.Key(client.RemoteAddr())
-	if !s.limiter.Acquire(src) {
+	verr, admitted := s.verifyClient(ctx, src, client)
+	if !admitted {
 		return fatal(client, "53300", "too many concurrent authentication attempts")
 	}
-	defer s.limiter.Release(src)
-	authlimit.Sleep(ctx, s.limiter.Penalty(src))
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if err := s.verifyClientSCRAM(client); err != nil {
-		s.limiter.Fail(src)
+	if verr != nil {
 		return fatal(client, "28P01", fmt.Sprintf("password authentication failed for user %q", rawUser))
 	}
-	s.limiter.Reset(src)
 
 	// 認証済み → branch 解決(必要なら lazy create)
 	port, err := s.router.RouteBranch(ctx, branch)

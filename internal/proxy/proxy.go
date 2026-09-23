@@ -144,6 +144,33 @@ func (s *Server) handle(ctx context.Context, client net.Conn) {
 	}
 }
 
+// verifyClient は authlimit のスロットを取って app パスワードを検証する。
+// スロットは検証中だけ保持し、結果に応じて Fail / Reset してから返す。
+// admitted=false は同時試行の上限超過(検証していない)。
+func (s *Server) verifyClient(ctx context.Context, src string, authResp, salt []byte) (verified, admitted bool) {
+	if !s.limiter.Acquire(src) {
+		return false, false
+	}
+	defer s.limiter.Release(src)
+	authlimit.Sleep(ctx, s.limiter.Penalty(src))
+	if ctx.Err() != nil {
+		return false, true
+	}
+	// クライアントの応答長で認証方式を判別する(#197): 32byte=caching_sha2
+	// (MySQL 8.0 既定 / 9.x)、20byte=mysql_native_password(旧クライアント)。
+	if len(authResp) != 20 {
+		verified = verifyCachingSha2Password(s.cfg.AppPassword, salt[:20], authResp)
+	} else {
+		verified = verifyNativePassword(s.cfg.AppPassword, salt, authResp)
+	}
+	if verified {
+		s.limiter.Reset(src)
+	} else {
+		s.limiter.Fail(src)
+	}
+	return verified, true
+}
+
 // authErr は ERR パケットを送って接続を切る。
 func authErr(client net.Conn, seq byte, code uint16, state, msg string) error {
 	_ = writePacket(client, packet{seq: seq, body: buildErr(code, state, msg)})
@@ -202,28 +229,22 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	// (MySQL 8.0 既定 / 9.x)、20byte=mysql_native_password(旧クライアント)。
 	// 総当たり対策(#297)。同一接続元の同時試行を絞り、失敗が続いていれば
 	// **検証の前に**待たせる。検証後に遅らせるだけだと並列接続で迂回できる。
+	// スロットは**検証の間だけ**握る(#318)。以前は defer で関数末尾 = pipe() が
+	// 終わるまで握っていたので、同じ IP からの同時セッションが 8 本で頭打ちになり、
+	// 接続プールや NAT 越しのクライアントが 9 本目で拒否されていた。
 	src := authlimit.Key(client.RemoteAddr())
-	if !s.limiter.Acquire(src) {
+	sha2 := len(hr.authResp) != 20 // 応答の形は後段(OK の返し方)でも使う
+	verified, admitted := s.verifyClient(ctx, src, hr.authResp, salt)
+	if !admitted {
 		return authErr(client, seq+1, 1040, "08004", "Too many concurrent authentication attempts")
 	}
-	defer s.limiter.Release(src)
-	authlimit.Sleep(ctx, s.limiter.Penalty(src))
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	sha2 := len(hr.authResp) != 20
-	verified := false
-	if sha2 {
-		verified = verifyCachingSha2Password(s.cfg.AppPassword, salt[:20], hr.authResp)
-	} else {
-		verified = verifyNativePassword(s.cfg.AppPassword, salt, hr.authResp)
-	}
 	if !verified {
-		s.limiter.Fail(src)
 		return authErr(client, seq+1, 1045, "28000",
 			fmt.Sprintf("Access denied for user '%s'@'%s' (using password: YES)", user, branch))
 	}
-	s.limiter.Reset(src)
 
 	// 4. 認証済み → branch 解決(必要なら lazy create)
 	port, err := s.router.RouteBranch(ctx, branch)
