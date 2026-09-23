@@ -118,17 +118,12 @@ error の情報:
 用途ごとに lifecycle が違う。`config.yaml` で定義し、`--profile` で選ぶ。
 
 ```yaml
-profiles:
-  preview:
-    idle_stop_after: 30m
-    delete_after_idle: 168h
-  ci:
-    idle_stop_after: 5m
-    delete_after_idle: 1h
-  sandbox:
-    idle_stop_after: 1h
-    delete_after_idle: 720h
-default_profile: preview
+branches:
+  default_profile: preview
+  profiles:
+    preview: { idle_stop_after: 30m, delete_after_idle: 168h }
+    ci:      { idle_stop_after: 5m,  delete_after_idle: 1h }
+    sandbox: { idle_stop_after: 1h,  delete_after_idle: 720h }
 ```
 
 branch は永久資源ではなく lease。`expires_at` を持ち、延長は明示操作。
@@ -225,9 +220,9 @@ sashiki baseline set baseline-20260904-9f8e7d    # 明示的に切り替え。�
 GC の残す条件: current / branch から参照中 / retention 内 / keep_last の対象。
 
 ```yaml
-baselines:
+baseline:
   keep_last: 3
-  retention: 30d
+  retention: 720h   # 0 = 期間では残さず keep_last だけで決める
 ```
 
 ZFS clone は origin snapshot に依存するので、sashiki が lineage を把握して GC する。参照中の baseline は消せない(`zfs promote` は使わない。lineage が追えなくなる)。
@@ -328,9 +323,9 @@ PoC の結果: メモリ不足時は新 branch が失敗するのではなく、
 ```yaml
 branches:
   max_branches: 100     # volume の数
-  max_running: 10       # 同時稼働 mysqld の数
 engine:
   mysql:
+    max_running: 10     # 同時稼働 mysqld の数(0 = 無制限)
     buffer_pool_size: 256M
     expected_rss: 600M  # buffer pool + 固定オーバーヘッドの見積もり
     memory_headroom: 1G # host に残す
@@ -342,10 +337,9 @@ create / wake / recreate 前に `MemAvailable > expected_rss + memory_headroom` 
 
 ```yaml
 storage:
-  high_watermark: 80%       # warning、メトリクスで通知
-  critical_watermark: 90%   # create / wake / recreate を拒否
-branches:
-  default_storage_quota: 20GiB   # zfs set quota / refquota
+  high_watermark: 0.8            # 0〜1 の比率。warning、メトリクスで通知
+  critical_watermark: 0.9        # create / wake / recreate を拒否
+  default_storage_quota: 20GiB   # zfs set refquota(ebs-zfs のみ)
 ```
 
 migration の失敗や大量 UPDATE で 1 branch が pool を食い尽くすのを防ぐ。
@@ -452,7 +446,7 @@ hook 側がやること: Git clone、PR checkout、依存インストール、mi
 |`on-reset`            |rollback → Start → Ready 後                           |
 |`on-recreate`         |新 clone に対して `on-create` と同じ(省略時は `on-create` を使う)   |
 |`on-delete`           |StopGracefully 後、volume 削除前                          |
-|`on-baseline-build`   |baseline build 中(データ投入・マスク・migration)。12-3 の build 本体|
+|(baseline build)      |hook ではなく `baseline.refresh_script` / `source_dir`(12-3)。環境変数の `SASHIKI_EVENT` は `baseline-build`|
 |`on-baseline-validate`|candidate から起動した一時 branch に対して                       |
 
 場所 `hooks.dir`(既定 `/etc/sashiki/hooks`)、実行ユーザー `sashiki`、timeout 既定 10 分、引数なし・環境変数渡し。
@@ -483,12 +477,12 @@ hook 側がやること: Git clone、PR checkout、依存インストール、mi
 |Method  |Path                        |説明                                                         |成功             |エラー                              |
 |--------|----------------------------|-----------------------------------------------------------|---------------|---------------------------------|
 |`GET`   |`/branches`                 |一覧                                                         |200            |                                 |
-|`POST`  |`/branches`                 |作成 `{name, profile?, baseline?, port?, metadata?, source?}`|202 + operation|400 / 409 / 507                  |
+|`POST`  |`/branches`                 |作成 `{name, profile?, baseline?, port?, owner?, purpose?, ttl?, source?}`|202 + operation|400 / 409 / 507                  |
 |`GET`   |`/branches/{name}`          |詳細                                                         |200            |404                              |
 |`POST`  |`/branches/{name}/reset`    |`@init` へ                                                  |202 + operation|404 / 409                        |
 |`POST`  |`/branches/{name}/recreate` |current baseline から作り直し                                    |202 + operation|404                              |
-|`POST`  |`/branches/{name}/wake`     |sleeping → running                                         |202 + operation|404 / 507                        |
-|`POST`  |`/branches/{name}/sleep`    |running → sleeping                                         |202 + operation|404                              |
+|`POST`  |`/branches/{name}/wake`     |sleeping → running(同期)                                    |200            |404 / 507                        |
+|`POST`  |`/branches/{name}/sleep`    |running → sleeping(同期)                                    |200            |404                              |
 |`POST`  |`/branches/{name}/retry`    |failed_operation を再実行                                      |202 + operation|404 / 409                        |
 |`POST`  |`/branches/{name}/lease`    |`{for: "7d"}`                                           |200            |404                              |
 |`DELETE`|`/branches/{name}`          |削除                                                         |202 + operation|404                              |
@@ -497,12 +491,12 @@ hook 側がやること: Git clone、PR checkout、依存インストール、mi
 |`POST`  |`/baselines/build`          |build → candidate                                          |202 + operation|409 実行中                          |
 |`POST`  |`/baselines/{name}/validate`|                                                           |202 + operation|404                              |
 |`POST`  |`/baselines/{name}/publish` |current pointer 更新                                         |200            |404 / 412 未 validate / 412 未 mask|
-|`DELETE`|`/baselines/{name}`         |GC 対象外なら拒否                                                 |202            |409 参照中                          |
+|`DELETE`|`/baselines/{name}`         |GC 対象外なら拒否(同期)                                            |200            |409 参照中                          |
 |`GET`   |`/operations/{id}`          |非同期操作の状態                                                   |200            |404                              |
 |`GET`   |`/capacity`                 |memory / storage / ports の空き                               |200            |                                 |
 |`GET`   |`/healthz`                  |                                                           |200            |                                 |
 
-> **実装ノート(v1.x 現在)**: 表の baseline 系は実装では `GET /v1/baseline`(current)/ `GET /v1/baselines` / `POST /v1/baseline/set|gc|refresh`(build→validate→publish の一括)。段階 API(build/validate/publish/delete)は #84 で実装済み(`POST /v1/baseline/{build,validate,publish,delete}`、build/validate は 202 非同期)。refresh(一括)は互換維持。
+> **実装ノート(現在)**: 表の baseline 系は実装では `GET /v1/baseline`(current)/ `GET /v1/baselines` / `POST /v1/baseline/set|gc|refresh`(build→validate→publish の一括)。段階 API(build/validate/publish/delete)は #84 で実装済み(`POST /v1/baseline/{build,validate,publish,delete}`、build/validate は 202 非同期)。refresh(一括)は互換維持。
 > また表にない実装済みエンドポイントとして `GET /v1/doctor`、`POST /v1/gc/orphans`、`POST /v1/drain`、`GET /v1/branches/{name}/schema`、`POST /v1/branches/{name}/query`(データブラウザ)、`POST /v1/branches/{name}/hooks/{event}`、Web UI(`GET /`)がある。
 > **202 + operation 非同期化は実装済み(#82)**。`create` / `reset` / `recreate` / `retry` / `delete` は **202 + `{operation_id}`**(+ `Sashiki-Operation-Id` ヘッダ)を返し、本体はバックグラウンド実行される(fsx-zfs で数分かかるため)。名前の妥当性・存在チェック・`exist_ok` 短絡は同期で先に評価して即 4xx/200 を返す。`wake` / `lease` は高速なので同期のまま(200)。**CLI は既定で `--wait`**(operation の完了までポーリングし、体感を同期に保つ。`--no-wait` で `operation_id` だけ返す。`--timeout` / `--interval` 可)。GitHub Action も 202 を検知して poll する。
 
@@ -530,7 +524,7 @@ proxy はユーザー名でルーティングするため、`user` と `port` �
 `engine_port` はブランチ自身の listener を常に返す。**接続用ではなく**、ログや `ss` の出力と
 突き合わせる調査用。
 
-エラー形式と `code`: `invalid_name`, `branch_exists`, `branch_not_found`, `baseline_not_found`, `limit_reached`(memory / storage / max_running / max_branches を `detail` で区別), `hook_failed`, `storage_error`, `engine_error`, `operation_in_progress`, `precondition_failed`, `unauthorized`
+エラー形式と `code`: `invalid_name`, `branch_exists`, `branch_not_found`, `baseline_not_found`, `limit_reached`(memory / storage / max_running / max_branches を `detail` で区別), `hook_failed`, `storage_error`, `engine_error`, `operation_in_progress`, `precondition_failed`, `unauthorized`, `insufficient_scope`(403、トークンの scope 不足)。全一覧は docs/REFERENCE.md
 
 -----
 
@@ -549,8 +543,8 @@ sashiki baseline list | build | validate <b> | publish <b> | set <b> | gc [--dry
 sashiki op list | show <id> | wait <id>
 sashiki capacity
 sashiki doctor
-sashiki token create --name N | list | revoke N
-sashiki init --pool P --device DEV [--yes]
+sashiki token create --name N [--scope branches|admin] | list | revoke N
+sashiki init --pool P --device DEV [--engine mysql|postgres] [--app-pass PW] [--platform darwin] [--yes]
 sashiki version
 ```
 
@@ -609,7 +603,8 @@ CREATE TABLE hook_runs (
 );
 
 CREATE TABLE tokens (
-  name TEXT PRIMARY KEY, hash TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT
+  name TEXT PRIMARY KEY, hash TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT,
+  scope TEXT NOT NULL DEFAULT 'branches'   -- branches | admin(#294)
 );
 ```
 
@@ -655,7 +650,7 @@ daemon 再起動後、state.db / ZFS dataset / mysqld プロセス / systemd uni
 
 **発行主体は sashiki 運用者(sashikid ホストに root で入れる人)**。トークンは 2 系統ある:
 
-1. **state.db トークン(`sashiki token`)** — root がホスト上で `sashiki token create --name <n>` で発行。**平文は 1 回だけ表示**し、DB には SHA-256 ハッシュのみ保存(`state.db` の tokens テーブル、last_used_at 記録)。`list` / `revoke` で管理。複数本・失効可。
+1. **state.db トークン(`sashiki token`)** — root がホスト上で `sashiki token create --name <n> [--scope branches|admin]` で発行(既定 `branches` = ブランチ操作と読み取り。`admin` は baseline publish / promote、drain、gc、データブラウザ、hook 手動実行も可)。**平文は 1 回だけ表示**し、DB には SHA-256 ハッシュのみ保存(`state.db` の tokens テーブル、last_used_at 記録)。`list` / `revoke` で管理。複数本・失効可。
 2. **env トークン(`SASHIKI_API_TOKEN`)** — sashikid 起動時の環境変数で渡す静的 1 本(後方互換)。Terraform モジュールはこれを `random_password` で生成し、SSM SecureString(出力 `api_token_ssm_path`)に保存する。利用側は SSM から取得する。
 
 `sashiki init` はトークンを発行しない(パッケージ/権限/zpool/config 生成まで)。手動運用では init 後に `token create` を 1 回叩く。
@@ -708,6 +703,7 @@ storage:
     base_volume_id: fsvol-xxxx
     dns_name: fs-xxxx.fsx.ap-northeast-1.amazonaws.com   # 必須
     parent_volume_id: ""          # 空なら自動発見
+    baseline_snapshot: baseline
     mount_root: /mnt/sashiki
   local:                          # apfs / reflink
     root: ""
@@ -809,7 +805,7 @@ adapter の仕事は「PR #123 → branch `pr-123`」の変換と PR コメン�
     profile: preview
     source: '{"type":"github_pr","repository":"${{ github.repository }}","ref":"${{ github.event.pull_request.number }}"}'
     on_close: delete
-    comment: true
+    comment: "true"   # action.yml は文字列比較なので引用符付き
 ```
 
 PR open で create(fsx-zfs では常に必須。ebs-zfs は lazy create でも生えるが Action での明示 create を推奨)、synchronize(push)でも create を呼ぶ(既にあれば既存を返すだけ。migration の再適用は利用者が `recreate` を選ぶ)、close で delete。TTL は別途効く。
@@ -909,14 +905,13 @@ sashiki/
 │   ├── baseline/      # Baseline Manager(build/validate/publish/GC, provenance)
 │   ├── storage/       # ebszfs/, fsxzfs/(interface + Capabilities)
 │   ├── engine/        # mysql/(Start/StopGracefully/Kill/Ready), postgres/
-│   ├── capacity/      # memory / storage / port admission
 │   ├── hooks/
 │   ├── state/         # SQLite, reconciler
 │   ├── ops/           # operations(非同期ジョブ)
 │   ├── api/
 │   └── proxy/
-├── hooks/             # サンプル(on-create migration、on-baseline-build、on-baseline-validate)
-├── deploy/terraform, deploy/systemd, deploy/apparmor
+├── hooks/             # サンプル(on-create.sh.example)。baseline build は examples/baseline-refresh
+├── deploy/terraform, deploy/systemd, deploy/orbstack(AppArmor / sudoers は init が生成)
 ├── action/
 ├── docs/SPEC.md, DECISIONS.md, COSTS.md
 └── README.md
@@ -950,7 +945,7 @@ Storage ──────── Workspace / Branch Manager ──────�
 |**v0.4**|proxy 方式 A(認証終端)への移行、username routing、認証後 lazy create、Web UI 拡充                                                                                                                                                                   |`mysql -udev@pr-2 -h <host>` で存在しない branch が(認証後に)生えて繋がる                                                                                                    |
 |**v1.x**|fsx-zfs、multi-host、replaceable compute、local-zfs profile、Postgres、team quota                                                                                                                                                      |backend を切り替えてもコアと CLI が変わらない                                                                                                                               |
 
-> 注: 実装は歴史的経緯により一部を前倒し済み(proxy 中継・lazy create・fsx・postgres は v1.0 時点で搭載)。
+> 注: 実装は歴史的経緯により一部を前倒し済み(proxy 中継・lazy create・fsx・postgres は搭載済み)。
 > 本表は「機能の完成度をどの順で仕様水準に引き上げるか」の指針として読む。進捗は issue #48 参照。
 
 FSx を「完成版」とは扱わない。EBS-ZFS 版を中心に据えて実運用し、multi-host / Spot / host 使い捨て / RAM 限界のどれかが出た時点で fsx-zfs を本命に格上げする。

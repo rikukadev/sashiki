@@ -4,7 +4,7 @@
 //	POST /v1/branches/{name}/query   任意 SQL の実行(行数・時間・セルサイズに上限)
 //
 // ブランチは使い捨ての開発 DB であり、接続ユーザーも開発用(proxy_user)なので
-// 書き込みも許可する(壊したら reset すればよい)。MySQL エンジンのみ対応。
+// 書き込みも許可する(壊したら reset すればよい)。mysql / postgres に対応。
 //
 // 任意 SQL 実行は loopback 無認証(仕様 13-3)の配下に入るため、SSH トンネルで
 // UI を使う開発者のブラウザ経由の攻撃を browserSafe で遮断する(CSRF / DNS

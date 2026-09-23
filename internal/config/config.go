@@ -87,9 +87,9 @@ type Engine struct {
 }
 
 // PostgresEngine は postgres エンジンの設定。
-// 注意: プロトコルプロキシは現状 MySQL 専用のため、postgres ブランチへの接続は
-// 直接ポート(sashiki show <name>)になる(#222 で pgproxy 予定)。リモート接続する
-// 場合は listen_addresses を広げ、base の pg_hba.conf に host 行を入れておくこと。
+// 接続は listen.proxy(pgproxy、#222)経由か直接ポート(sashiki show <name>)。直接
+// リモート接続する場合は listen_addresses を広げ、base の pg_hba.conf に host 行を
+// 入れておくこと。
 type PostgresEngine struct {
 	PortRange       [2]int `yaml:"port_range"` // 既定 [5433, 5632]
 	BinDir          string `yaml:"bin_dir"`    // 既定 /usr/lib/postgresql/16/bin

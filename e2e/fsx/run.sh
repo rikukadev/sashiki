@@ -76,7 +76,7 @@ if [ -f /etc/apparmor.d/usr.sbin.mysqld ]; then
   ln -sf /etc/apparmor.d/usr.sbin.mysqld /etc/apparmor.d/disable/ || true
   apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld 2>/dev/null || true
 fi
-mkdir -p /etc/sashiki/hooks /var/lib/sashiki/branches /var/log/sashiki/hooks /mnt/sashiki
+mkdir -p /etc/sashiki/hooks /var/lib/sashiki/branches /var/log/sashiki/hooks /mnt/sashiki /run/sashiki
 EOS
 
 log "install sashiki binaries + systemd unit"
@@ -85,7 +85,7 @@ GOOS=linux GOARCH=amd64 go build -o /tmp/sashiki-fsx "$ROOT/cmd/sashiki"
 scp -q -i $KEY /tmp/sashikid-fsx ubuntu@$IP:/tmp/sashikid
 scp -q -i $KEY /tmp/sashiki-fsx ubuntu@$IP:/tmp/sashiki
 scp -q -i $KEY "$ROOT/deploy/systemd/mysqld@.service" ubuntu@$IP:/tmp/
-$SSH 'sudo install -m755 /tmp/sashikid /usr/local/bin/sashikid && sudo install -m755 /tmp/sashiki /usr/local/bin/sashiki && sudo cp /tmp/mysqld@.service /etc/systemd/system/ && sudo sed -i "s|/var/log/sashiki/%i.err|/var/log/sashiki/%i.err --innodb-buffer-pool-size=128M|; s|--innodb-buffer-pool-size=256M||" /etc/systemd/system/mysqld@.service && sudo systemctl daemon-reload'
+$SSH 'sudo install -m755 /tmp/sashikid /usr/local/bin/sashikid && sudo install -m755 /tmp/sashiki /usr/local/bin/sashiki && sudo cp /tmp/mysqld@.service /etc/systemd/system/ && sudo systemctl daemon-reload'
 
 # --- 3. FSx AVAILABLE 待ち → base ボリューム作成 ---
 log "wait fsx available"
@@ -113,7 +113,7 @@ mysql -uroot -S /tmp/base.sock <<'SQL'
 CREATE DATABASE app;
 CREATE TABLE app.items (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64));
 INSERT INTO app.items (name) VALUES ('alpha'), ('beta'), ('gamma');
-CREATE USER 'dev'@'%' IDENTIFIED WITH mysql_native_password BY 'dev';
+CREATE USER 'dev'@'%' IDENTIFIED WITH caching_sha2_password BY 'dev';
 GRANT ALL PRIVILEGES ON *.* TO 'dev'@'%';
 FLUSH PRIVILEGES;
 SQL
@@ -150,7 +150,8 @@ engine:
   type: mysql
   mysql:
     port_range: [3401, 3410]
-    env_dir: /etc/sashiki
+    buffer_pool_size: 128M   # unit の $MYSQLD_DEFAULTS で渡る(#299)
+    env_dir: /run/sashiki    # mysqld@.service の EnvironmentFile と同じ(#177)
     sudo: false
 branches:
   name_pattern: "^[a-z0-9-]{1,32}\$"

@@ -145,8 +145,8 @@ jobs:
 
   # PostgreSQL エンジンの E2E(create / reset / delete + crash-recovery 判定)。
   # スクリプトが postgresql を apt 導入し PGBIN を自動検出、loopback zpool
-  # (recordsize=8k)で完結する。現状 postgres は proxy/lazy-create 未対応なので
-  # 直ポート接続で検証する。ブランチ保護の required には未追加(安定するまで advisory)。
+  # (recordsize=8k)で完結する。pgproxy(SCRAM、#222)は別途ユニットテストがあり、
+  # この e2e は直ポート接続で検証する。ブランチ保護の required には未追加(安定するまで advisory)。
   e2e-postgres:
     runs-on: ubuntu-latest
     steps:

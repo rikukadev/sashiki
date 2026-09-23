@@ -95,14 +95,16 @@ fi
 # --- API トークンを sashikid の環境に渡す ---
 install -d -m 0755 /etc/sashiki
 umask 077
-printf 'SASHIKI_API_TOKEN=%s\n' "$API_TOKEN" > /etc/sashiki/env
+# deb の sashikid.service が読む EnvironmentFile と同じ名前にする(#328: 以前は
+# /etc/sashiki/env に書いて drop-in で補っていた)。
+printf 'SASHIKI_API_TOKEN=%s\n' "$API_TOKEN" > /etc/sashiki/sashikid.env
 set -x
-# systemd unit が EnvironmentFile=/etc/sashiki/env を読む前提。無ければ drop-in で補う。
-if ! grep -q "EnvironmentFile=/etc/sashiki/env" /etc/systemd/system/sashikid.service 2>/dev/null; then
+# unit が EnvironmentFile=/etc/sashiki/sashikid.env を読む前提。無ければ drop-in で補う。
+if ! grep -q "EnvironmentFile=-\?/etc/sashiki/sashikid.env" /etc/systemd/system/sashikid.service 2>/dev/null; then
   install -d -m 0755 /etc/systemd/system/sashikid.service.d
   cat > /etc/systemd/system/sashikid.service.d/10-env.conf <<'EOF'
 [Service]
-EnvironmentFile=/etc/sashiki/env
+EnvironmentFile=/etc/sashiki/sashikid.env
 EOF
   systemctl daemon-reload
 fi

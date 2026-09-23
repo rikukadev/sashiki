@@ -52,13 +52,14 @@ api_json() {
   local id=100
   # GitHub の実レスポンス同様、release 自体にも name がある。これを asset の
   # name と誤って組にすると、latest 経路が別 asset を掴む(#287)。property の
-  # コロン前後も compact JSON と同じく空白無しにする。
+  # name はコロン前後を compact JSON と同じく空白無しに、url は空白ありにする(両方通ること)。
   echo '{"tag_name":"v'"$VER"'","name":"v'"$VER"'","assets":['
   local first=1
   for f in "$FIX"/sashiki_* "$FIX/checksums.txt"; do
     [ $first = 1 ] || echo ','
     first=0
-    printf '{"url":"https://api.github.com/repos/rikukadev/sashiki/releases/assets/%d","name":"%s"}' "$id" "$(basename "$f")"
+    # url はコロン後に空白ありの形も混ぜて、install.sh のパースが両方通ることを見る。
+    printf '{"url": "https://api.github.com/repos/rikukadev/sashiki/releases/assets/%d","name":"%s"}' "$id" "$(basename "$f")"
     id=$((id + 1))
   done
   echo ']}'
@@ -92,7 +93,7 @@ case "$url" in
   */releases/assets/*)
     # id → name は latest.json の並び順(100 から連番)で引く
     id=${url##*/}
-    name=$(grep -o '"url":"[^"]*"\|"name":"[^"]*"' "$SASHIKI_FAKE_FIX/latest.json" \
+    name=$(grep -o '"url"[[:space:]]*:[[:space:]]*"[^"]*"\|"name":"[^"]*"' "$SASHIKI_FAKE_FIX/latest.json" \
       | awk '/^"url"/ { seen++ } seen == target && /^"name"/ { print; exit }' target="$((id - 99))" \
       | cut -d'"' -f4)
     src="$SASHIKI_FAKE_FIX/$name"

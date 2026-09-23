@@ -1,7 +1,7 @@
 # macOS(OrbStack)で sashiki をフル VM 無しに動かす(#113 候補B / #140)。
 #   1. ホストで:  ./deploy/orbstack/build.sh   # sashiki を linux にクロスビルド
 #   2. docker compose -f deploy/orbstack/compose.yaml up --build
-#   3. mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 3306   # 未知ブランチは lazy create
+#   3. mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 13306  # 未知ブランチは lazy create(3306 は 13306 に公開)
 # privileged は loopback XFS(reflink)のマウントに必要。
 services:
   sashiki:

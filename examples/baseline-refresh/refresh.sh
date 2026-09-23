@@ -9,6 +9,13 @@
 # 検証し、残っていれば SIGTERM で回収してから進む(exit 0 は信用しない)。
 #
 # 環境変数: SASHIKI_BASELINE_TAG (例: baseline-20260905T120000Z)
+#
+# 実行ユーザーは sashikid と同じ(systemd デプロイでは sashiki)。init が生成する
+# /etc/sudoers.d/sashiki は zfs / zpool / systemctl しか許可しないので、下の
+# `sudo -u mysql mysqld` を使うなら次の 1 行を /etc/sudoers.d/sashiki-refresh に足す:
+#   sashiki ALL=(mysql) NOPASSWD: /usr/sbin/mysqld
+# refresh_script を書かず baseline.source_dir に SQL を置けば、sashikid の組み込み
+# ローダーが base の mysqld を起動するので sudoers の追加は要らない。
 set -euo pipefail
 
 POOL=dbpool

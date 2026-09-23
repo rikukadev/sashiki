@@ -60,7 +60,7 @@ func adminOnly(r *http.Request) bool {
 type Server struct {
 	mgr    *workspace.Manager
 	domain string
-	engine string // mysql | postgres。データブラウザは mysql のみ対応
+	engine string // mysql | postgres(データブラウザは両方対応)
 	user   string
 	pass   string
 	token  string // 環境変数トークン(後方互換)。空なら無効

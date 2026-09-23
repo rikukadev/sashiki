@@ -20,7 +20,7 @@
 | 検証用の最小 FSx | — | Single-AZ gen1、64GB、64MB/s ≈ 6 円/時 |
 
 CoW のためブランチ自体のディスク消費はほぼゼロ(クローン直後は数百 KB、書き換えた分だけ増える)。
-容量課金の主役はベースデータと baseline スナップショットの世代数(`baselines.keep_last` / GC で制御)。
+容量課金の主役はベースデータと baseline スナップショットの世代数(`baseline.keep_last` / GC で制御)。
 
 ## 性能特性の違い(実測)
 
