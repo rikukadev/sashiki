@@ -282,7 +282,7 @@ echo "  replacement: $IID"
 aws ec2 wait instance-running --region "$REGION" --instance-ids "$IID" \
   || fail "置換先EC2がrunningにならない"
 aws ec2 attach-volume --region "$REGION" --volume-id "$DATA_VOLUME_ID" \
-  --instance-id "$IID" --device /dev/sdb >/dev/null \
+  --instance-id "$IID" --device /dev/sdf >/dev/null \
   || fail "data volumeを置換先へattachできない"
 
 wait_for_ready
