@@ -250,7 +250,7 @@ func (m *Manager) Doctor(ctx context.Context) (DoctorReport, error) {
 		case len(exposed) > 0:
 			d.ExposedListeners = exposed
 			add("branch listener exposure", checkWarn, strings.Join(exposed, "; ")+" は loopback 以外から到達可能。"+
-				"systemd 構成は `sudo sashiki init --skip-packages --yes` で unit を更新し、branch を再起動してください")
+				"systemd 構成は `sudo sashiki init --pool <zpool 名> --skip-packages --yes` で unit を更新し、branch を再起動してください(pool 名は zpool list)")
 		default:
 			add("branch listener exposure", checkOK, "loopback only")
 		}
