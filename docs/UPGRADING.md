@@ -57,8 +57,10 @@ CI からこれらを叩いているなら `sashiki token create --name ci --sco
 実行中の変更操作(create / reset / recreate / retry / delete)があるあいだ、同じブランチへの
 次の変更は **`409 operation_in_progress`**(CLI は終了コード 4)で断る。
 `--wait`(既定)で完了を待ってから次を叩けば当たらない。sashikid は停止時に実行中の操作を
-最大 10 分待つようになったので、`systemd` の `TimeoutStopSec` は 660 秒にしてある
-(`sashiki init` を再実行するとユニットが更新される)。
+最大 10 分待つようになったので、`sashikid.service` の `TimeoutStopSec` は 660 秒にしてある。
+このユニットは deb が置くもので、**`sashiki init` では更新されない**(init が書くのは
+`mysqld@.service` / `postgres-sashiki@.service` だけ)。deb を上げ直せば `/lib/systemd/system/`
+に入る。tarball から入れている場合は `deploy/systemd/sashikid.service` を手で置き直す。
 
 ### 6. macOS の Postgres 版の既定ポートが変わる(#304)
 
@@ -70,7 +72,21 @@ MySQL 版(`:8080` / `:9100`)と同時に常駐できる。CLI は `SASHIKI_API_U
 
 systemd 構成でも branch の mysqld が `127.0.0.1` に閉じる(次回の起動から)。
 直結ポート(3401-3600)に外から繋いでいた構成は、proxy(3306)経由に変える。
-ユニット自体の更新は `sudo sashiki init --skip-packages --yes` の再実行で入る。
+
+ユニット自体(`mysqld@.service`)の更新は `init` の再実行で入る。**pool 名を必ず合わせる**:
+
+```bash
+zpool list                                             # pool 名を確認(Terraform 構築は tank)
+sudo sashiki init --pool <pool 名> --skip-packages --yes
+```
+
+0.11.0 の `init` は `--pool` 省略時に既存 config の pool を使うが、それより前の版で
+`--pool` を省略すると既定の `dbpool` で AppArmor と sudoers を書き換え、動いている
+ブランチの mysqld が拒否される。
+
+#299(`buffer_pool_size` / `shared_buffers` が実際の mysqld / postgres に届く)も、
+旧ユニットが残っていると unit 側の `256M` 固定が勝つ。同じ再実行で新しいユニットが入り、
+ブランチを再起動(`sashiki sleep` → 接続)すると効く。
 
 ### 8. Terraform: API が VPC 内から到達できるようになる(#286)
 

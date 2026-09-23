@@ -43,11 +43,7 @@ func initStepsPostgres(opts initOpts) []initStep {
 				return runCmd(nil, "systemctl", "disable", "postgresql")
 			},
 		},
-		initStep{
-			name: "sudoers: sashiki ユーザーを zfs/systemctl の限定操作に制限",
-			done: func() bool { return fileEqual(sudoersPath, []byte(sudoersContent(opts.pool))) },
-			run:  func() error { return installSudoers(opts.pool) },
-		},
+		// zpool と dataset を sudoers より先に確認する(#320)。
 		initStep{
 			name: fmt.Sprintf("zpool %s", opts.pool),
 			done: func() bool { return cmdOK("zpool", "list", opts.pool) },
@@ -85,6 +81,11 @@ func initStepsPostgres(opts initOpts) []initStep {
 			run: func() error {
 				return runCmd(nil, "zfs", "create", "-o", "recordsize=8k", "-o", "logbias=throughput", opts.pool+"/branches")
 			},
+		},
+		initStep{
+			name: "sudoers: sashiki ユーザーを zfs/systemctl の限定操作に制限",
+			done: func() bool { return fileEqual(sudoersPath, []byte(sudoersContent(opts.pool))) },
+			run:  func() error { return installSudoers(opts.pool) },
 		},
 		initStep{
 			name: "ディレクトリ作成 (/etc/sashiki, /var/lib/sashiki, /var/log/sashiki)",

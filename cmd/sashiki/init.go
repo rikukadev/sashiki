@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"os"
 	"os/exec"
 	"os/user"
@@ -29,6 +30,7 @@ type initOpts struct {
 	pool         string
 	device       string
 	skipPackages bool
+	poolExplicit bool // --pool が明示されたか(#320: 省略時は既存 config から拾う)
 	yes          bool
 	platform     string // linux(既定) | darwin
 	root         string // darwin: storage.local.root(既定 ~/Library/Application Support/sashiki)
@@ -55,6 +57,7 @@ func cmdInit(args []string) int {
 				return usage()
 			}
 			opts.pool = args[i]
+			opts.poolExplicit = true
 		case "--device":
 			i++
 			if i >= len(args) {
@@ -99,6 +102,18 @@ func cmdInit(args []string) int {
 	if os.Geteuid() != 0 {
 		fmt.Fprintln(os.Stderr, "sashiki init: root で実行してください (sudo sashiki init ...)")
 		return exitError
+	}
+	// --pool 省略時は既存 config の pool を使う(#320)。既定の dbpool のまま
+	// 既存ホストで再実行すると、AppArmor と sudoers が dbpool 用に書き換わって
+	// 動いているブランチ(例: Terraform の tank)の mysqld が拒否される。
+	if !opts.poolExplicit {
+		if p := existingPoolFromConfig("/etc/sashiki/config.yaml"); p != "" && p != opts.pool {
+			fmt.Printf("sashiki init: --pool 省略のため既存 config の pool %q を使います\n", p)
+			opts.pool = p
+		}
+	} else if p := existingPoolFromConfig("/etc/sashiki/config.yaml"); p != "" && p != opts.pool {
+		fmt.Fprintf(os.Stderr, "sashiki init: 警告 --pool %s は既存 config の pool %s と違います。"+
+			"既存ホストの再実行なら --pool %s(pool 名は zpool list で確認)\n", opts.pool, p, p)
 	}
 	// app_pass の既定 "dev" は、proxy を 0.0.0.0:3306 で開き lazy create が既定 ON の
 	// Linux 構成では「到達できる誰でもブランチを作れる」状態になる(#297)。
@@ -195,33 +210,9 @@ func initSteps(opts initOpts) []initStep {
 				return runCmd(nil, "systemctl", "disable", "mysql")
 			},
 		},
-		initStep{
-			name: "AppArmor: mysqld を datadir に閉じ込める完全プロファイルを生成(enforce)",
-			done: func() bool {
-				// 内容が最新の生成結果と一致する場合のみスキップ(pool 変更や
-				// プロファイル更新時は再生成・再ロードする)
-				return fileEqual(apparmorProfilePath, []byte(apparmorProfile(opts.pool)))
-			},
-			run: func() error {
-				// Ubuntu 24.04 の /etc/apparmor.d/usr.sbin.mysqld は空の
-				// プレースホルダで local override は no-op のため、sashiki 自前の
-				// 完全プロファイルを配布して enforce でロードする(#79)。
-				return installApparmorProfile(opts.pool)
-			},
-		},
-		initStep{
-			name: "sudoers: sashiki ユーザーを zfs/systemctl の限定操作に制限",
-			done: func() bool {
-				// 内容が最新の生成結果と一致する場合のみスキップ(旧形式の
-				// 緩い sudoers は上書きして絞り直す #78)
-				return fileEqual(sudoersPath, []byte(sudoersContent(opts.pool)))
-			},
-			run: func() error {
-				// /usr/sbin/zfs 全体は広すぎる。実呼び出し形に合わせてパス制限し、
-				// visudo -cf 検証後に本置きする(#78)。将来 root-helper 化する。
-				return installSudoers(opts.pool)
-			},
-		},
+		// zpool と dataset を AppArmor / sudoers より先に確認する(#320)。pool 名を
+		// 間違えたとき、プロファイルと sudoers を書き換える前に「pool が無い」で
+		// 止まるように。
 		initStep{
 			name: fmt.Sprintf("zpool %s", opts.pool),
 			done: func() bool { return cmdOK("zpool", "list", opts.pool) },
@@ -253,6 +244,33 @@ func initSteps(opts initOpts) []initStep {
 			name: fmt.Sprintf("データセット %s/branches", opts.pool),
 			done: func() bool { return cmdOK("zfs", "list", opts.pool+"/branches") },
 			run:  func() error { return runCmd(nil, "zfs", "create", opts.pool+"/branches") },
+		},
+		initStep{
+			name: "AppArmor: mysqld を datadir に閉じ込める完全プロファイルを生成(enforce)",
+			done: func() bool {
+				// 内容が最新の生成結果と一致する場合のみスキップ(pool 変更や
+				// プロファイル更新時は再生成・再ロードする)
+				return fileEqual(apparmorProfilePath, []byte(apparmorProfile(opts.pool)))
+			},
+			run: func() error {
+				// Ubuntu 24.04 の /etc/apparmor.d/usr.sbin.mysqld は空の
+				// プレースホルダで local override は no-op のため、sashiki 自前の
+				// 完全プロファイルを配布して enforce でロードする(#79)。
+				return installApparmorProfile(opts.pool)
+			},
+		},
+		initStep{
+			name: "sudoers: sashiki ユーザーを zfs/systemctl の限定操作に制限",
+			done: func() bool {
+				// 内容が最新の生成結果と一致する場合のみスキップ(旧形式の
+				// 緩い sudoers は上書きして絞り直す #78)
+				return fileEqual(sudoersPath, []byte(sudoersContent(opts.pool)))
+			},
+			run: func() error {
+				// /usr/sbin/zfs 全体は広すぎる。実呼び出し形に合わせてパス制限し、
+				// visudo -cf 検証後に本置きする(#78)。将来 root-helper 化する。
+				return installSudoers(opts.pool)
+			},
 		},
 		initStep{
 			name: "ディレクトリ作成 (/etc/sashiki, /var/lib/sashiki, /var/log/sashiki)",
@@ -290,6 +308,33 @@ func initSteps(opts initOpts) []initStep {
 		configPermStep("/etc/sashiki/config.yaml"),
 	)
 	return steps
+}
+
+// existingPoolFromConfig は既存 config の storage.ebs-zfs.pool(旧名 zfs.pool)を
+// 返す。無ければ空。config.Load は未知キーで落ちる(#300)ので、アップグレード前の
+// config でも読めるよう必要なキーだけ寛容に読む。
+func existingPoolFromConfig(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var c struct {
+		Storage struct {
+			Zfs struct {
+				Pool string `yaml:"pool"`
+			} `yaml:"ebs-zfs"`
+			LegacyZfs struct {
+				Pool string `yaml:"pool"`
+			} `yaml:"zfs"`
+		} `yaml:"storage"`
+	}
+	if err := yaml.Unmarshal(data, &c); err != nil {
+		return ""
+	}
+	if c.Storage.Zfs.Pool != "" {
+		return c.Storage.Zfs.Pool
+	}
+	return c.Storage.LegacyZfs.Pool
 }
 
 func renderConfig(pool string) ([]byte, error) {
