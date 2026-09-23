@@ -1,7 +1,9 @@
-# sashiki on OrbStack (container, VM-less-ish)
+# sashiki on Docker / OrbStack (container, VM-less-ish)
 
-macOS で sashiki を **フル VM 無し**に近い形で動かすためのコンテナ経路（#113 候補B）。
-OrbStack の軽量 Linux コンテナ上で、ZFS の代わりに **XFS reflink** を CoW 基盤に使う。
+Linux コンテナで sashiki を動かす経路(#113 候補B)。macOS では OrbStack(や Docker
+Desktop)の軽量 Linux コンテナ上で、ZFS の代わりに **XFS reflink** を CoW 基盤に使う。
+`docker compose -f deploy/orbstack/compose.yaml up --build` で sashikid・mysqld・
+loopback XFS が 1 コンテナで立ち上がる(手順は `compose.yaml` 冒頭)。
 
 ## なぜ ZFS ではなく XFS reflink か
 
@@ -69,18 +71,12 @@ docker compose exec sashiki xfs_growfs /var/lib/sashiki-data
 Compose が volume 名に project prefix を付けた場合は、`docker volume ls` で実名を確認し、
 上の `sashiki-xfs` を置き換える。縮小はできないので、事前に volume をバックアップする。
 
-## フル sashikid をコンテナで動かすには（ロードマップ）
+## コンテナ構成の現状
 
-本 PR で **CoW 基盤（storage 層）は OrbStack 実機で検証済み**。エンドツーエンドで
-`sashikid` を回すには、あと以下が要る（#113 の follow-up）:
-
-1. **reflink バックエンドの sashikid 配線** — `storage.backend: reflink` と config
-   （`root` に XFS reflink マウントを指定）を追加。
-2. **エンジンの起動方式** — `internal/engine/{mysql,postgres}` は `systemctl` 直叩き。
-   コンテナでは次のどちらか:
-   - コンテナ内で **systemd を PID 1** で動かす（Lima VM と同じ。既存エンジンがそのまま動く）
-   - **非 systemd の process runner**（mysqld 直 spawn）を実装（#113 候補A と共通のイネーブラ）
-3. 上記が揃えば `Dockerfile`（Ubuntu + mysql-server + sashiki + loopback XFS の
-   entrypoint）で `docker run` 一発の PR プレビュー基盤になる。
-
-現時点の本 PR のスコープは **「OrbStack で使える CoW 基盤（reflink backend）＋実機検証」** まで。
+- **reflink バックエンド**(`storage.backend: reflink`、`storage.local.root` に XFS reflink
+  マウント)は sashikid に配線済み。
+- **エンジンは process モード**(`engine.mysql.mode: process`、mysqld を直接 spawn)で動く。
+  systemd は要らない。
+- `Dockerfile` + `compose.yaml`(Ubuntu + mysql-server + sashiki + loopback XFS の
+  entrypoint)で `docker compose up` 一発の PR プレビュー基盤になる。接続は
+  `mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 13306`(compose が 3306 を 13306 に公開)。

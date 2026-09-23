@@ -30,7 +30,7 @@
 
 ## ADR-004: mysqld は systemd テンプレートユニットで管理
 
-**決定**: sashikid が直接 mysqld プロセスを孵化させず、`systemctl start mysqld@<branch>` を経由する。datadir とポートは `/etc/sashiki/<branch>.env` の EnvironmentFile で渡す。
+**決定**: sashikid が直接 mysqld プロセスを孵化させず、`systemctl start mysqld@<branch>` を経由する。datadir とポートは `/run/sashiki/<branch>.env`(sashikid の RuntimeDirectory、#177)の EnvironmentFile で渡す。
 
 **理由**: sashikid の再起動・クラッシュとブランチ mysqld の生存を分離できる。プロセス監督(異常終了の記録)を systemd に任せられる。PoC で実証済みの構成。
 

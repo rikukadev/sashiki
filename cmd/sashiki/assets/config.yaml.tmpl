@@ -40,8 +40,8 @@ engine:
     env_dir: /run/sashiki
     # systemd デプロイでは mysqld を systemctl 経由で起動する(要 root=sudoers)。
     sudo: true
-  # postgres を使う場合(接続はプロキシでなく直接ポート、sashiki show <name> で確認):
-  #   - listen.proxy: "" にする(プロキシは MySQL 専用)
+  # postgres を使う場合(listen.proxy は postgres でも使える。dev@<branch> で SCRAM 認証):
+  #   - listen.proxy を "0.0.0.0:5432" 等にする(直結するなら "" にして sashiki show <name> のポート)
   #   - idle_stop_after / delete_after_idle は接続追跡ができないため自動で無効化される
   #   - リモート接続には listen_addresses を広げ、base の pg_hba.conf に host 行が必要
   # postgres:

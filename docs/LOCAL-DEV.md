@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/rikukadev/sashiki/main/install.sh |
 
 # ループバックファイルの zpool で初期化(物理ディスク不要)
 truncate -s 40G /var/tmp/sashiki.img
-sudo sashiki init --pool tank --device /var/tmp/sashiki.img
+sudo sashiki init --pool tank --device /var/tmp/sashiki.img --app-pass dev   # 省略するとランダム生成(下の DB_PASSWORD と合わせる)
 ```
 
 ### 3. baseline(元データ)を入れる(VM 内)
@@ -67,7 +67,7 @@ CLI で create する必要すらない。各 worktree の `.envrc`(direnv)に�
 export DB_HOST=host.docker.internal   # OrbStack のコンテナから。Mac host 直なら 127.0.0.1
 export DB_PORT=3306
 export DB_USER="dev@$(git branch --show-current | tr '/' '-' | cut -c1-32)"
-export DB_PASSWORD=dev                # ローカル既定。config の app_pass を変えたら合わせる
+export DB_PASSWORD=dev                # init --app-pass の値(config の app_pass)。省略して生成させた場合はその値
 ```
 
 - branch 名は sashiki の `name_pattern`(`^[a-z0-9-]{1,32}$`)に合わせて整形している(`/`→`-`、32 文字まで)。
@@ -125,7 +125,7 @@ config 例(macOS ネイティブ):
 storage:
   backend: apfs
   local:
-    root: ~/Library/Application Support/sashiki   # APFS 上のルート
+    root: /Users/<you>/Library/Application Support/sashiki   # APFS 上のルート(`~` は展開されない。init は絶対パスで書く)
 engine:
   type: mysql
   mysql:
@@ -180,12 +180,12 @@ MySQL と同じく、Postgres も **systemd 無し(process モード)** + ロー
 storage:
   backend: apfs
   local:
-    root: ~/Library/Application Support/sashiki-pg
+    root: /Users/<you>/Library/Application Support/sashiki-pg   # `~` は展開されない
 engine:
   type: postgres
   postgres:
     mode: process                     # pg_ctl で直接起動(systemd 不要)
-    bin_dir: /opt/homebrew/opt/postgresql@16/bin
+    bin_dir: /opt/homebrew/opt/postgresql@17/bin   # init は入っている中で最新の postgresql@N を選ぶ
     app_user: dev
     app_pass: dev
 ```
@@ -221,7 +221,7 @@ PGPASSWORD=dev psql -h 127.0.0.1 -p 5432 -U 'dev@pr-1' -d app   # 未作成で�
   branch 部でルーティングし、パスワードは `app_pass` で検証する。
 - **任意のユーザー名を許可**したいときは `proxy.allowed_user: ""`(空文字)を設定する。
   特定名だけ許可したいなら `proxy.allowed_user: <name>`。未設定なら app_user のみ。
-- **管理者権限が要る操作**(migration 等、authense の migrationdb は root 固定)は
+- **管理者権限が要る操作**(migration ツールが root など固定ユーザーで繋ぐ場合)は
   app_user では権限不足になりうる。`proxy.allowed_user: ""` にした上で baseline に
   管理ユーザーを用意し、`<admin>@<branch>` で接続する(パスワードは `app_pass` で検証)。
 

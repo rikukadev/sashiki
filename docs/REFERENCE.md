@@ -23,7 +23,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 
 | コマンド | 何をするか |
 |---|---|
-| `create <name>` | 作る。`--exist-ok`(既にあれば既存を返す)/ `--profile P` / `--ttl D` / `--port N` / `--baseline <snapshot>` / `--owner O` / `--purpose P` / `--source <json>` |
+| `create <name>` | 作る。`--wait`(既定)/ `--no-wait` / `--exist-ok`(既にあれば既存を返す)/ `--profile P` / `--ttl D` / `--port N` / `--baseline <snapshot>` / `--owner O` / `--purpose P` / `--source <json>` |
 | `list` / `show <name>` | 一覧 / 詳細。`show` は `stale`(origin が current baseline より古い)と `baseline:`(promote 元)も出す |
 | `env <name>` | `DB_HOST=` / `DB_PORT=` / `DB_USER=` を出す(dotenv)。`--prefix P` で接頭辞を変える。パスワードと内部ポートは出さない |
 | `connect <name>` | engine に合わせたクライアント(`mysql` / `psql`)を exec する。パスワードは `SASHIKI_DB_PASSWORD`(無ければクライアントが尋ねる)、接続先は API の host(`SASHIKI_DB_HOST` で上書き可)。Postgres は `SASHIKI_DB_NAME`(既定 `postgres`)に繋ぐ |
@@ -32,7 +32,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 | `retry <name>` | `error` のブランチで失敗した操作をやり直す |
 | `delete <name>` | 消す |
 | `sleep <name>` / `wake <name>` | 手動で停止 / 起床(同期) |
-| `lease renew <name> --for <dur>` | 絶対期限を延ばす(例 `7d`) |
+| `lease renew <name> --for <dur> [--json]` | 絶対期限を延ばす(例 `7d`) |
 | `hooks run <name> <event>` | hook だけを手で流す |
 
 変更操作は既定で完了まで待つ。`--no-wait` で operation id だけ返し、`--timeout <dur>` /
@@ -56,12 +56,12 @@ config と state.db を直接触る(sashikid 経由ではない)。
 
 | コマンド | 何をするか |
 |---|---|
-| `init` | ホストを構成する。`--pool <p>` / `--device <dev>` / `--engine mysql\|postgres` / `--app-pass <pw>`(省略時: Linux はランダム生成、darwin は `dev`。config が既にあると無視される)/ `--platform darwin`(既定は実行中の OS)/ `--root <dir>`(darwin)/ `--skip-packages` / `--yes` |
-| `token create --name <n> [--scope branches\|admin]` / `token list` / `token revoke <n>` | API トークン。既定 scope は `branches` |
+| `init` | ホストを構成する。`--pool <p>` / `--device <dev>` / `--engine mysql\|postgres` / `--app-pass <pw>`(省略時: Linux はランダム生成、darwin は `dev`。config が既にあると無視される)/ `--platform darwin`(既定は実行中の OS)/ `--root <dir>`(darwin)/ `--skip-packages` / `--yes`(`-y`) |
+| `token create --name <n> [--scope branches\|admin]` / `token list` / `token revoke <n>` | API トークン。既定 scope は `branches`。`--config <path>` で config を指定 |
 | `op list` / `op show <id>` / `op wait <id>` | operation(直近 50 件) |
-| `capacity` / `doctor` | 容量とヘルスチェック(読み取りのみ) |
+| `capacity` / `doctor` | 容量とヘルスチェック(読み取りのみ)。`doctor` は問題があると終了コード 1 |
 | `gc --orphans` | state.db に無い dataset を消す |
-| `drain` | 全ブランチを安全に停止する(メンテ前) |
+| `drain [--json]` | 全ブランチを安全に停止する(メンテ前) |
 | `version` | 版を出す |
 
 環境変数: `SASHIKI_API_URL` / `SASHIKI_API_TOKEN`(または `~/.config/sashiki/token`)/
@@ -73,7 +73,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 エラーにする。引数の不足・不正(`--for` / `--prefix` の値無し、`--threads` の不正、`export` の `--to` 無し、
 `init --engine` の不正)も 2 で終了する。
 
-`sashikid` は `--config <path>` だけを取る。
+`sashikid` は `--config <path>`(`-config` も可)と `--help` だけを取る。
 
 ## 終了コード
 
@@ -117,9 +117,11 @@ config と state.db を直接触る(sashikid 経由ではない)。
 | `GET /` | 200 | Web UI(HTML。データは API を叩いて取る) |
 
 エラーは `{"error": {"code": "...", "message": "..."}}`。主なコード:
-`invalid_name`(400)/ `unauthorized`(401)/ `insufficient_scope`(403)/
-`branch_not_found` `baseline_not_found`(404)/ `branch_exists` `operation_in_progress`(409)/
-`precondition_failed`(412)/ `limit_reached`(507)/ `storage_error`(500)。
+`invalid_name` `invalid_request` `query_error`(400)/ `unauthorized`(401)/
+`insufficient_scope` `cross_origin_denied` `host_mismatch`(403)/
+`branch_not_found` `baseline_not_found`(404)/ `branch_exists` `operation_in_progress`(409。baseline refresh の重複実行も)/
+`precondition_failed`(412)/ `invalid_content_type`(415)/ `unsupported_engine`(501)/
+`limit_reached`(507)/ `storage_error`(500)。
 
 ## hooks に渡る環境変数
 
@@ -131,7 +133,7 @@ hooks dir(`hooks.dir`)に置いた実行ファイル名がイベント名にな�
 | `SASHIKI_EVENT` | イベント名(baseline build スクリプトでは `baseline-build`) |
 | `SASHIKI_BRANCH` | ブランチ名 |
 | `SASHIKI_PORT` | ブランチの DB ポート |
-| `SASHIKI_SOCKET` | UNIX socket のパス |
+| `SASHIKI_SOCKET` | UNIX socket のパス(`/tmp/mysql-<branch>.sock`。mysql の systemd モードだけ実在し、process モード / postgres では使えない) |
 | `SASHIKI_DATADIR` | datadir |
 | `SASHIKI_ENGINE` | `mysql` / `postgres` |
 | `SASHIKI_ADMIN_USER` | 管理ユーザー名 |
@@ -187,7 +189,6 @@ close で delete(既に無ければ成功扱い)、それ以外のイベント�
 | `proxy_user` | `dev` | アプリ用ユーザー名 |
 | `sashiki_ref` | モジュール同梱の `VERSION` | install.sh の取得元 |
 | `github_token` | `""` | private リポジトリから取るとき |
-| `engine_version` | `8.0` | RDS 互換のために受けるだけで未使用 |
 | `tags` | `{}` | 追加タグ |
 
 出力は `endpoint` / `reader_endpoint`(同値)/ `port` / `username` / `branch_user` /

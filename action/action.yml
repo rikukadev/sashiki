@@ -60,6 +60,9 @@ outputs:
   user:
     description: "接続ユーザー (dev@<branch>)"
     value: ${{ steps.branch.outputs.user }}
+  created:
+    description: "新規作成なら true、既存なら false。transport: ssm では unknown"
+    value: ${{ steps.branch.outputs.created }}
 
 runs:
   using: composite

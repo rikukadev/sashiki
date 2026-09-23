@@ -40,7 +40,8 @@ trap 'rm -f "$RESP"' EXIT
 
 api() {
   local method=$1 path=$2 body=${3:-}
-  local args=(-sS -o "$RESP" -w '%{http_code}' -X "$method" "${auth[@]}" \
+  # 空配列の "${auth[@]}" は set -u + bash < 4.4 で落ちる(macOS の /bin/bash 3.2)。
+  local args=(-sS -o "$RESP" -w '%{http_code}' -X "$method" ${auth[@]+"${auth[@]}"} \
     -H "Content-Type: application/json" "${SASHIKI_API_URL}${path}")
   if [ -n "$body" ]; then args+=(-d "$body"); fi
   curl "${args[@]}"
@@ -147,7 +148,7 @@ do_create() {
     ssm_branch_json "$SASHIKI_BRANCH"
     created=unknown  # SSM 経由では新規/既存の区別を取らない
   else
-    # exist_ok=true で冪等: 201=新規作成 / 200=既存。
+    # exist_ok=true で冪等: 202=新規作成(operation を待つ)/ 200=既存。
     # synchronize でも create のみ(TTL 削除後の復活を兼ねる)。migration の
     # 再適用は利用者が recreate を明示的に選ぶ(v2 仕様 22-1)。
     local body code

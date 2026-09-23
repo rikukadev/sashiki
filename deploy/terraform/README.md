@@ -10,7 +10,7 @@ Secrets Manager(dev パスワード)+ SSM(API トークン)を作り、user-data
 
 ```hcl
 module "db" {
-  source = "github.com/rikukadev/sashiki//deploy/terraform?ref=v0.2.0"
+  source = "github.com/rikukadev/sashiki//deploy/terraform?ref=v0.11.0" # x-release-please-version
 
   name           = "myapp-preview"
   vpc_id         = var.vpc_id
@@ -23,9 +23,9 @@ module "db" {
   route53_zone_id = var.internal_zone_id
   dns_name        = "db.internal.example.com"
 
-  # public 化前は private リポジトリ取得用の token が要る
-  github_token = var.github_token
-  sashiki_ref  = "v0.2.0" # バイナリとモジュールは同じ ref で固定する
+  # リポジトリが private のときだけ要る(public なら省略)
+  # github_token = var.github_token
+  sashiki_ref  = "v0.11.0" # バイナリとモジュールは同じ ref で固定する x-release-please-version
 }
 ```
 
@@ -46,7 +46,7 @@ variable "engine" {
 
 module "sashiki" {
   count             = var.engine == "sashiki" ? 1 : 0
-  source            = "github.com/rikukadev/sashiki//deploy/terraform?ref=v0.2.0"
+  source            = "github.com/rikukadev/sashiki//deploy/terraform?ref=v0.11.0" # x-release-please-version
   name              = var.name
   vpc_id            = var.vpc_id
   subnet_ids        = var.subnet_ids

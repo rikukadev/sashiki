@@ -4,7 +4,7 @@ EC2 を 1 台立てて、利用者と同じ手順で sashiki を入れ、使い�
 
 ```bash
 goreleaser release --snapshot --clean --skip=publish,sign,announce
-AWS_REGION=ap-northeast-1 E2E_ARTIFACT_BUCKET=sashiki-e2e-artifacts-<account> \
+AWS_REGION=ap-northeast-1 E2E_ARTIFACT_BUCKET=sashiki-e2e-artifacts-apne1-<account> \
   ./e2e/aws/run.sh dist/sashiki_*_linux_amd64.deb my-tag
 ```
 
@@ -52,7 +52,7 @@ aws ec2 describe-instances \
 |---|---|---|
 | ロール | `sashiki-e2e-github-actions` | CI が OIDC で引き受ける。EC2 の起動 / 破棄・SSM・成果物バケット |
 | ロール | `sashiki-e2e-instance`(インスタンスプロファイル) | `AmazonSSMManagedInstanceCore` + 成果物バケットの読み取り |
-| バケット | `sashiki-e2e-artifacts-<account>` | deb と `provision.sh` の受け渡し。1 日で消える |
+| バケット | `sashiki-e2e-artifacts-apne1-<account>`(`ci-policy.json` と同名) | deb と `provision.sh` の受け渡し。1 日で消える |
 
 **インバウンドは開けない。** SSM はアウトバウンドだけで足りるので、SSH 鍵も
 踏み台も要らない。これが `transport=ssm` を選んだ理由でもある。
