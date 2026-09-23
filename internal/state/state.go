@@ -822,7 +822,9 @@ func (d *DB) PruneHookRuns(before time.Time) (int64, error) {
 	res, err := d.sql.Exec(
 		`DELETE FROM hook_runs
 		  WHERE finished_at IS NOT NULL AND finished_at < ?
-		    AND id NOT IN (SELECT MAX(id) FROM hook_runs GROUP BY branch, event)`,
+		    AND id NOT IN (SELECT MAX(id) FROM hook_runs
+		                    WHERE branch IN (SELECT name FROM branches)
+		                    GROUP BY branch, event)`,
 		before.UTC().Format(timeFmt))
 	if err != nil {
 		return 0, err

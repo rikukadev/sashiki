@@ -42,7 +42,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 
 | コマンド | 何をするか |
 |---|---|
-| `baseline import --from <src>` | 初回の baseline を作る。`<src>` は SQL ファイル / ディレクトリ(`*.sql` を並列投入)/ `s3://…` / `-`(標準入力)。Postgres は `pg_dump` のカスタム形式・ディレクトリ形式も自動判定。`--db <name>` / `--import-cnf <my.cnf>` / `--threads N` / `--config <path>` |
+| `baseline import --from <src>` | 初回の baseline を作る。Linux(ZFS)は root で実行する(`sudo`)。macOS ネイティブは不要。`<src>` は SQL ファイル / ディレクトリ(`*.sql` を並列投入)/ `s3://…` / `-`(標準入力)。Postgres は `pg_dump` のカスタム形式・ディレクトリ形式も自動判定。`--db <name>` / `--import-cnf <my.cnf>` / `--threads N` / `--config <path>` |
 | `baseline list [--json]` | 登録済み snapshot と current |
 | `baseline refresh` | `refresh_script` か `source_dir` で作り直す(開始だけ返す) |
 | `baseline build` / `validate <snap>` / `publish <snap>` / `delete <snap>` | 段階ごとに実行する |
@@ -56,7 +56,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 
 | コマンド | 何をするか |
 |---|---|
-| `init` | ホストを構成する。`--pool <p>` / `--device <dev>` / `--engine mysql\|postgres` / `--app-pass <pw>`(省略時はランダム生成)/ `--platform darwin`(既定は実行中の OS)/ `--root <dir>`(darwin)/ `--skip-packages` / `--yes` |
+| `init` | ホストを構成する。`--pool <p>` / `--device <dev>` / `--engine mysql\|postgres` / `--app-pass <pw>`(省略時: Linux はランダム生成、darwin は `dev`。config が既にあると無視される)/ `--platform darwin`(既定は実行中の OS)/ `--root <dir>`(darwin)/ `--skip-packages` / `--yes` |
 | `token create --name <n> [--scope branches\|admin]` / `token list` / `token revoke <n>` | API トークン。既定 scope は `branches` |
 | `op list` / `op show <id>` / `op wait <id>` | operation(直近 50 件) |
 | `capacity` / `doctor` | 容量とヘルスチェック(読み取りのみ) |
@@ -67,8 +67,11 @@ config と state.db を直接触る(sashikid 経由ではない)。
 環境変数: `SASHIKI_API_URL` / `SASHIKI_API_TOKEN`(または `~/.config/sashiki/token`)/
 `SASHIKI_CONFIG`(config の場所を上書き)/ `SASHIKI_DB_HOST` / `SASHIKI_DB_PASSWORD` / `SASHIKI_DB_NAME`(`connect` 用)。
 
-未知のフラグ・余分な引数はエラーにする(終了コード 2)。`--timeout` / `--interval` の値が
-読めないときも黙って既定に戻さずエラーにする。
+未知のフラグ・余分な引数は全コマンドでエラーにする(終了コード 2)。`--timeout` / `--interval` の値が
+読めないときも黙って既定に戻さずエラーにする。create 専用のフラグ(`--port` / `--owner` / `--ttl` …)は
+他のブランチ操作では受けない。`token create` の `--scope` は `branches` | `admin` 以外(値無し・タイポ)を
+エラーにする。引数の不足・不正(`--for` / `--prefix` の値無し、`--threads` の不正、`export` の `--to` 無し、
+`init --engine` の不正)も 2 で終了する。
 
 `sashikid` は `--config <path>` だけを取る。
 
@@ -95,7 +98,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 | `GET /v1/branches` | 200 | 一覧(ページングなし) |
 | `POST /v1/branches` | 202 / 200 / 409 | body `{name, port?, profile?, owner?, purpose?, source?, ttl?, baseline?}`。`?exist_ok=true` なら既存を 200 で返す |
 | `GET /v1/branches/{name}` | 200 / 404 | |
-| `POST /v1/branches/{name}/reset` \| `/recreate` \| `/retry` | 202 | 412 = promote 元、409 = 実行中の操作あり |
+| `POST /v1/branches/{name}/reset` \| `/recreate` \| `/retry` | 202 | 404 / 412(promote 元)は同期で返す。409 = 実行中の操作あり |
 | `DELETE /v1/branches/{name}` | 202 | 404 / 412 は同期で返す |
 | `POST /v1/branches/{name}/sleep` \| `/wake` | 200 | 同期 |
 | `POST /v1/branches/{name}/lease` | 200 | body `{for: "7d"}` |
@@ -141,7 +144,7 @@ hooks dir(`hooks.dir`)に置いた実行ファイル名がイベント名にな�
 
 hook は sashikid と同じユーザー・環境で走る(API トークンだけは渡さない)。
 タイムアウトは `hooks.timeout`(既定 10 分)。ログは `<hooks.log_dir>/<branch>-<event>-<時刻>.log` に
-30 日残る。`on-reset` / `on-delete` の失敗は記録して続行する。
+`hooks.log_retention`(既定 30 日、負の値で削除しない)の間残る。`on-reset` / `on-delete` の失敗は記録して続行する。
 
 ## GitHub Action
 

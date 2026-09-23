@@ -514,14 +514,19 @@ func (m *Manager) recreateFrom(ctx context.Context, b state.Branch, origin stora
 		return Info{}, m.failOp(b.Name, op, stage, err)
 	}
 	// recreate は新 mysqld を起動する。旧は Kill されるので純増ではないが、
-	// 一時的に新旧が並ぶため admission を確認する。
-	if err := m.admitMemory("recreate"); err != nil {
-		return Info{}, err
-	}
-	if err := m.admitStorage(ctx, "recreate"); err != nil {
-		return Info{}, err
-	}
-	if err := m.db.SetState(b.Name, state.StateResetting, ""); err != nil {
+	// 一時的に新旧が並ぶため admission を確認する。判定と resetting への遷移は
+	// create / wake と同じ admitMu で 1 区間にする(#327)。
+	if err := func() error {
+		m.admitMu.Lock()
+		defer m.admitMu.Unlock()
+		if err := m.admitMemory("recreate"); err != nil {
+			return err
+		}
+		if err := m.admitStorage(ctx, "recreate"); err != nil {
+			return err
+		}
+		return m.db.SetState(b.Name, state.StateResetting, "")
+	}(); err != nil {
 		return Info{}, err
 	}
 	// 旧 volume が無い(create の clone で失敗した後の retry 等)なら、退避も
@@ -901,19 +906,29 @@ func (m *Manager) Wake(ctx context.Context, name string) (Info, error) {
 	if b.State != state.StateSleeping && b.State != state.StateRunning && !retrying {
 		return Info{}, fmt.Errorf("branch %s is %s (cannot wake)", name, b.State)
 	}
-	if b.State == state.StateSleeping || retrying {
-		if err := m.admitMemory("wake"); err != nil {
-			return Info{}, err
-		}
-		if err := m.admitStorage(ctx, "wake"); err != nil {
-			return Info{}, err
-		}
-	}
 	vol, err := m.resolveVolume(ctx, b)
 	if err != nil {
 		return Info{}, err
 	}
 	ins := m.instance(b, vol)
+	if b.State == state.StateSleeping || retrying {
+		// admission の判定と running への遷移を create と同じ admitMu で 1 区間にする
+		// (#327: 判定だけ無保護だと同時 wake で max_running を超えられた)。running に
+		// した行は他の判定で数に入る。起動に失敗したら failOp で error に落とす。
+		if err := func() error {
+			m.admitMu.Lock()
+			defer m.admitMu.Unlock()
+			if err := m.admitMemory("wake"); err != nil {
+				return err
+			}
+			if err := m.admitStorage(ctx, "wake"); err != nil {
+				return err
+			}
+			return m.db.SetState(name, state.StateRunning, "")
+		}(); err != nil {
+			return Info{}, err
+		}
+	}
 	if running, _ := m.eng.IsRunning(ctx, ins); !running {
 		// 起動失敗は failed_operation=wake で残す(#322: 以前は記録せず、README の
 		// 「wake も retry できる」が到達不能だった)。

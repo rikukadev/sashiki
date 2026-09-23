@@ -49,6 +49,9 @@ func cmdToken(args []string) int {
 	case "create":
 		return cmdTokenCreate(db, rest)
 	case "list":
+		if pos, _, err := parseArgs(rest, []string{"--config"}, nil); err != nil || len(pos) > 0 {
+			return usageToken()
+		}
 		return cmdTokenList(db)
 	case "revoke":
 		return cmdTokenRevoke(db, rest)
@@ -80,16 +83,19 @@ func tokenConfigPath(args []string) string {
 }
 
 func cmdTokenCreate(db *state.DB, args []string) int {
-	name, scope := "", state.ScopeBranches
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--name" && i+1 < len(args):
-			name = args[i+1]
-			i++
-		case args[i] == "--scope" && i+1 < len(args):
-			scope = args[i+1]
-			i++
-		}
+	// 未知のフラグ・値無しの --scope を黙って既定 branches で通さない(#325:
+	// `--scop admin` のタイポで branches が発行され、権限の取り違えに気づけない)。
+	// --config は cmdToken が先に読む(tokenConfigPath)が、ここでも受ける。
+	pos, opts, err := parseArgs(args, []string{"--name", "--scope", "--config"}, nil)
+	if err != nil {
+		return argError("token create", err)
+	}
+	if len(pos) > 0 {
+		return argError("token create", fmt.Errorf("余分な引数 %v", pos))
+	}
+	name, scope := opts["--name"], state.ScopeBranches
+	if v, ok := opts["--scope"]; ok {
+		scope = v
 	}
 	if name == "" {
 		return usageToken()
@@ -133,7 +139,11 @@ func cmdTokenList(db *state.DB) int {
 }
 
 func cmdTokenRevoke(db *state.DB, args []string) int {
-	if len(args) < 1 {
+	args, _, err := parseArgs(args, []string{"--config"}, nil)
+	if err != nil {
+		return argError("token revoke", err)
+	}
+	if len(args) != 1 {
 		return usageToken()
 	}
 	if err := db.RevokeToken(args[0]); err != nil {

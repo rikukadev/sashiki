@@ -175,6 +175,9 @@ func main() {
 	}
 
 	hr := hooks.NewRunner(cfg.Hooks.Dir, cfg.Hooks.LogDir, cfg.Hooks.Timeout)
+	if cfg.Hooks.LogRetention != 0 {
+		hr.LogRetention = cfg.Hooks.LogRetention // 負の値は pruneLogs が無効と解釈する(#327)
+	}
 	// API トークンを hook に見せない(#295)。auth.api_token_env で名前を変えて
 	// いても落とす。
 	hr.StripEnv = append(hr.StripEnv, cfg.Auth.APITokenEnv)
@@ -262,7 +265,7 @@ func main() {
 	if cfg.Listen.Metrics != "" {
 		// metrics は認証を持たない(Prometheus の scrape 前提)。ブランチ名・容量・
 		// メモリが見えるので、loopback 以外で開くなら到達元をネットワークで絞る(#301)。
-		if host, _, err := net.SplitHostPort(cfg.Listen.Metrics); err == nil {
+		if host, _, err := net.SplitHostPort(cfg.Listen.Metrics); err == nil && host != "localhost" {
 			if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 				log.Printf("sashikid: 警告 listen.metrics=%s は認証なしで loopback 以外に開いています。"+
 					"ブランチ名・容量が見えるので SG / ファイアウォールで到達元を絞ってください", cfg.Listen.Metrics)

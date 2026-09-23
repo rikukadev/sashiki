@@ -85,8 +85,8 @@ sudo sashiki init --pool dbpool --device /dev/nvme1n1   # デバイス名は lsb
 ### 3. baseline(元データ)を入れる
 
 ```bash
-# ダンプから baseline を作る(投入 → 正常終了 → snapshot 取得まで)
-sashiki baseline import --from prod-dump.sql
+# ダンプから baseline を作る(投入 → 正常終了 → snapshot 取得まで)。ZFS 操作のため root
+sudo sashiki baseline import --from prod-dump.sql
 ```
 
 baseline は **build → validate → publish** の 3 段階。検証に落ちた候補は current にならないので、
@@ -117,7 +117,10 @@ mysql -udev@pr-1 -p -h 127.0.0.1 -P3306   # :3306 固定エンドポイント経
 ```
 
 パスワードは `init` がランダム生成して表示したもの(`/etc/sashiki/config.yaml` の `app_pass`)。
-固定したいときは `sudo sashiki init --app-pass <値>`。macOS ネイティブとコンテナは開発用途なので既定 `dev` のまま。
+固定したいときは**手順 2 の `init` に `--app-pass <値>` を付ける**(config があると `init` は
+生成ステップを飛ばすので後から付けても効かない。後から変えるなら config の `app_pass` と
+baseline 内のユーザーのパスワードを両方変える)。macOS ネイティブとコンテナは開発用途なので
+既定 `dev`(`init --app-pass` で変更可)。
 
 ### macOS ネイティブ(VM 無し)
 
@@ -140,7 +143,9 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306
 `init --platform darwin` は root 不要。既定のルートは `~/Library/Application Support/sashiki`
 (Postgres は `sashiki-pg`、API は `:8081` なので MySQL 版と同時に常駐できる。`--root` で変更可)。`baseline import` / `token` などの CLI は
 そこにある `config.yaml` を自動で使う(`--config` / `SASHIKI_CONFIG` で上書き可)ので、
-Linux 手順と同じコマンドがそのまま通る。`init` が作った空の baseline は残り、
+Linux 手順と同じコマンドがそのまま通る。ただし **MySQL 版と Postgres 版を両方 init した場合や
+`--root` を変えた場合は自動検出しない**ので、`--config <path>` か `SASHIKI_CONFIG` で指定する。
+`init` が作った空の baseline は残り、
 `baseline import --from dump.sql` は新しい tag で取って current を切り替える。
 `sashiki token` も darwin では root 不要。詳細と Lima/worktree 連動は [docs/LOCAL-DEV.md](docs/LOCAL-DEV.md)。
 
@@ -226,7 +231,7 @@ GitHub Action なら `secrets.SASHIKI_API_TOKEN` を渡すだけ(下の使い方
 - ローテーションは **新規発行 → 配布先を差し替え → 旧トークンを `sashiki token revoke`**。
 - `GET /v1/healthz` と Web UI の HTML(`GET /`)は認証なしで返す(LB のヘルスチェック用 / UI がトークンを入力させるため)。Web UI は 401 を受けるとトークン入力欄を出し、`Authorization` ヘッダで API を叩く(タブの sessionStorage に保存)ので、`trust_loopback: false` でも使える。データブラウザは admin スコープが要る。
 - `listen.metrics`(既定 `127.0.0.1:9100`)は**認証なし**。ブランチ名・容量が見えるので、loopback 以外で開くなら到達元をネットワークで絞る(起動時に警告を出す)。
-- ⚠️ 認証免除は「接続元が loopback か」で判定する。**リバースプロキシ越しに公開すると接続元が 127.0.0.1 に見えて素通しになる**ため、外部公開時は sashikid を直接 listen させるか、**`auth.trust_loopback: false`** を設定して loopback でも Bearer トークンを必須にすること。
+- ⚠️ 認証免除は「接続元が loopback か」で判定する。**リバースプロキシ越しに公開すると接続元が 127.0.0.1 に見えて素通しになる**ため、外部公開時は sashikid を直接 listen させるか、**`auth.trust_loopback: false`** を設定して loopback でも Bearer トークンを必須にすること。Bearer で認証した要求はデータブラウザの Origin / Host 検査も免除されるので、`trust_loopback: false` + リバースプロキシ(Host が公開名)でもデータブラウザは使える。
 
 ### proxy(:3306)側の既定値
 

@@ -96,6 +96,14 @@ func cmdInit(args []string) int {
 			return usage()
 		}
 	}
+	// --engine の検証は root 検査より前に行う(#325: 非 root だと「root で実行して
+	// ください」が先に出て、引数エラーなのに終了コードが 1 になっていた)。
+	switch opts.engine {
+	case "", "mysql", "postgres":
+	default:
+		fmt.Fprintf(os.Stderr, "sashiki init: --engine %q は未対応です (mysql | postgres)\n", opts.engine)
+		return exitUsage
+	}
 	if opts.platform == "darwin" {
 		return cmdInitDarwin(opts)
 	}
@@ -138,7 +146,7 @@ func cmdInit(args []string) int {
 		steps = initStepsPostgres(opts)
 	default:
 		fmt.Fprintf(os.Stderr, "sashiki init: --engine %q は未対応です (mysql | postgres)\n", opts.engine)
-		return exitError
+		return exitUsage
 	}
 	// config が既にあれば app_pass は上書きしない(冪等)。表示も出さない。
 	_, statErr := os.Stat("/etc/sashiki/config.yaml")
@@ -172,16 +180,16 @@ func cmdInit(args []string) int {
 	}
 	fmt.Printf(`
 init 完了。次のステップ:
-  1. ベースデータを投入して baseline を作る:
-       sashiki baseline import --from %s
-  2. sashikid を起動: systemctl enable --now sashikid
+  1. ベースデータを投入して baseline を作る(ZFS 操作のため root):
+       sudo sashiki baseline import --from %s
+  2. sashikid を起動: sudo systemctl enable --now sashikid
   3. ブランチを作る: sashiki create pr-1
 `, dump)
 	if generatedPass && !configExisted {
 		fmt.Printf(`
 app パスワード(接続ユーザー dev の -p に使う。/etc/sashiki/config.yaml の app_pass):
   %s
-固定したいときは sashiki init --app-pass <値> で指定できる。
+固定したいときは init の前に sashiki init --app-pass <値> で指定する(既存 config は書き換えない)。
 `, opts.appPass)
 	}
 	return exitOK

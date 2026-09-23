@@ -14,9 +14,11 @@ EnvironmentFile=/run/sashiki/%i.env
 ExecStart=/bin/sh -c 'exec ${PGBIN}/postgres -D ${DATADIR} -p ${PORT} -c listen_addresses=${LISTEN_ADDRESSES:-127.0.0.1} -c unix_socket_directories=/tmp -c shared_buffers=${SHARED_BUFFERS:-128MB}'
 # fast shutdown を明示する(systemd 既定の SIGTERM は smart shutdown となり
 # 接続が残ると無期限に待つ)。TimeoutStopSec 超過で SIGKILL されると @init が
-# dirty になりうるため、余裕を持たせる。
-ExecStop=/bin/sh -c '${PGBIN}/pg_ctl stop -D ${DATADIR} -m fast'
-TimeoutStopSec=120
+# dirty になりうるため、mysqld@ / process モードと同じ 10 分まで待つ(#327)。
+# pg_ctl の -t は TimeoutStopSec より短くして、pg_ctl 自身のタイムアウトで
+# 失敗を報告できるようにする(既定 60 秒では長いチェックポイントで先に諦めていた)。
+ExecStop=/bin/sh -c '${PGBIN}/pg_ctl stop -D ${DATADIR} -m fast -t 590'
+TimeoutStopSec=600
 Restart=no
 LimitNOFILE=65535
 

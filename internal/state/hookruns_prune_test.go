@@ -15,6 +15,10 @@ func TestPruneHookRunsKeepsLatestPerEvent(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
+	// 最新行を残すのは存在する branch だけ(#327)。
+	if err := db.CreateBranch("pr-1", 3401, "base"); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 3; i++ {
 		id, err := db.RecordHookStart("pr-1", "on-create")
 		if err != nil {

@@ -114,6 +114,13 @@ func (s *Server) browserSafe(w http.ResponseWriter, r *http.Request) bool {
 			return false
 		}
 	}
+	// Host 検査(DNS リバインディング)も Bearer 認証の要求は免除する(#326)。攻撃ページは
+	// 別オリジンでトークンを持てないので、Host が公開名でも危険は無い。同一ホストの
+	// リバースプロキシ越し(接続元 127.0.0.1、Host=公開名、trust_loopback: false)で
+	// データブラウザが 403 になっていた。
+	if tokenAuth {
+		return true
+	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() && !loopbackHost(r.Host) {
 			writeErr(w, http.StatusForbidden, "host_mismatch",

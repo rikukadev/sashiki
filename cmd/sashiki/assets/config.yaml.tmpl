@@ -87,6 +87,7 @@ baseline:
 hooks:
   dir: /etc/sashiki/hooks
   # log_dir: 未設定なら log_dir/hooks に派生
+  # log_retention: 720h   # hook ログを残す期間(既定 30 日。-1s で削除しない)
 
 auth:
   api_token_env: SASHIKI_API_TOKEN   # このenv変数からBearerトークンを読む

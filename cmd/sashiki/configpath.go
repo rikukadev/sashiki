@@ -48,6 +48,14 @@ func defaultConfigPath() string {
 // requireConfigPath は defaultConfigPath が決められなかった(複数候補)ときに
 // 分かるエラーを返す。
 func requireConfigPath(p string) (string, error) {
+	// darwin で init 未実施だと /etc/sashiki/config.yaml に落ち、token が「root で
+	// 実行してください」と誤誘導する(#324)。config 不在が本当の原因なので init を案内。
+	if runtime.GOOS == "darwin" && p == "/etc/sashiki/config.yaml" {
+		if _, err := os.Stat(p); err != nil {
+			return "", fmt.Errorf("config が見つかりません。先に sashiki init --platform darwin を実行してください" +
+				"(別の場所にあるなら --config <path> か SASHIKI_CONFIG)")
+		}
+	}
 	if p != "" {
 		return p, nil
 	}

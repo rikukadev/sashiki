@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -169,13 +170,18 @@ func (s *scramServer) finalReply(data []byte) (string, error) {
 	recovered := xorBytes(proof, clientSig)
 	got := sha256.Sum256(recovered)
 	if subtle.ConstantTimeCompare(got[:], s.keys.storedKey) != 1 {
-		return "", fmt.Errorf("password verification failed")
+		return "", errPasswordMismatch
 	}
 	serverSig := hmacSHA256(s.keys.serverKey, []byte(authMessage))
 	return "v=" + base64.StdEncoding.EncodeToString(serverSig), nil
 }
 
 // --- クライアント役(バックエンドへ接続する) ---
+
+// errPasswordMismatch はパスワード不一致。authlimit の Fail に数えるのはこれだけで、
+// SCRAM 途中の切断・不正メッセージは数えない(#327: ネットワーク障害でリトライする
+// クライアントが tarpit されていた。MySQL 側も parse 失敗は数えない)。
+var errPasswordMismatch = errors.New("password verification failed")
 
 // scramClient は SCRAM-SHA-256 のクライアント側状態。
 type scramClient struct {

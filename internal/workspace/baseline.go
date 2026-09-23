@@ -36,11 +36,13 @@ type PromoteOptions struct {
 // refresh と同じ publish ポリシーを通す(#296)。以前は無条件に validated=true で
 // 登録して即 current にしていたため、require_masked / require_validated の抜け道に
 // なっていた。
+//
+// baselineMu は snapshot の登録と current の切替の間だけ持つ(#327)。以前は validate
+// (engine 起動 + hook、分単位)の間も握っていて、baseline set / gc / delete / refresh の
+// publish が全部ブロックしていた。
 func (m *Manager) PromoteBranch(ctx context.Context, name string, opts PromoteOptions) (string, error) {
 	unlock := m.lock(name)
 	defer unlock()
-	m.baselineMu.Lock()
-	defer m.baselineMu.Unlock()
 
 	pr, ok := m.st.(storage.BranchPromoter)
 	if !ok {
@@ -77,14 +79,17 @@ func (m *Manager) PromoteBranch(ctx context.Context, name string, opts PromoteOp
 	// promote は snapshot のために一時停止しただけなので、成否・どの経路で return
 	// しても branch は必ず使用可能な状態に戻す(best effort)。以前は登録失敗時に
 	// mysqld を停止したまま抜けていた(#156)。
+	// クライアント切断で r.Context() が cancel されても再起動は完走させる(#327:
+	// canceled ctx だと Start が即失敗し、running のまま mysqld が止まっていた)。
 	restarted := false
 	restartBranch := func() {
 		if restarted {
 			return
 		}
 		restarted = true
-		if err := m.eng.Start(ctx, ins); err == nil {
-			_ = m.eng.WaitReady(ctx, ins)
+		rctx := context.WithoutCancel(ctx)
+		if err := m.eng.Start(rctx, ins); err == nil {
+			_ = m.eng.WaitReady(rctx, ins)
 		}
 	}
 	defer restartBranch()
@@ -98,7 +103,10 @@ func (m *Manager) PromoteBranch(ctx context.Context, name string, opts PromoteOp
 		return "", fmt.Errorf("promote snapshot: %w", err)
 	}
 	prov := state.BaselineProvenance{DataAsOf: tag, Masked: opts.Masked}
-	if err := m.db.RegisterBaseline(string(snap), prov); err != nil {
+	m.baselineMu.Lock()
+	err = m.db.RegisterBaseline(string(snap), prov)
+	m.baselineMu.Unlock()
+	if err != nil {
 		return "", fmt.Errorf("promote: baseline 登録に失敗: %w", err)
 	}
 	// snapshot は取れたので branch はここで戻す。検証は candidate の clone
@@ -112,6 +120,14 @@ func (m *Manager) PromoteBranch(ctx context.Context, name string, opts PromoteOp
 			return "", fmt.Errorf("promote: validate: %w(%s は登録済みだが current にしていない)", err, snap)
 		}
 		prov.Validated = true
+	}
+	// validate の間に baseline delete / gc で消されていたら current にしない。
+	m.baselineMu.Lock()
+	defer m.baselineMu.Unlock()
+	if _, err := m.db.GetBaseline(string(snap)); err != nil {
+		return "", fmt.Errorf("promote: %s は validate 中に削除された(current にしていない): %w", snap, err)
+	}
+	if prov.Validated {
 		if err := m.db.RegisterBaseline(string(snap), prov); err != nil {
 			return "", fmt.Errorf("promote: validated 記録に失敗: %w", err)
 		}

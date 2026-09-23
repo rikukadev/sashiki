@@ -26,7 +26,7 @@ engine:
     sudo: false              # ログインユーザーで postgres を起動(sudo 不要)
     port_range: [5433, 5632]
     app_user: dev
-    app_pass: dev
+    app_pass: {{.AppPass}}
     listen_addresses: 127.0.0.1
     shared_buffers: 128M
     # initdb_args: []        # baseline import 時の initdb 追加引数(locale 等)
