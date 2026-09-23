@@ -172,16 +172,16 @@ func cmdInit(args []string) int {
 	}
 	fmt.Printf(`
 init 完了。次のステップ:
-  1. ベースデータを投入して baseline を作る:
-       sashiki baseline import --from %s
-  2. sashikid を起動: systemctl enable --now sashikid
+  1. ベースデータを投入して baseline を作る(ZFS 操作のため root):
+       sudo sashiki baseline import --from %s
+  2. sashikid を起動: sudo systemctl enable --now sashikid
   3. ブランチを作る: sashiki create pr-1
 `, dump)
 	if generatedPass && !configExisted {
 		fmt.Printf(`
 app パスワード(接続ユーザー dev の -p に使う。/etc/sashiki/config.yaml の app_pass):
   %s
-固定したいときは sashiki init --app-pass <値> で指定できる。
+固定したいときは init の前に sashiki init --app-pass <値> で指定する(既存 config は書き換えない)。
 `, opts.appPass)
 	}
 	return exitOK

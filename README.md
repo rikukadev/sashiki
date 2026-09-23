@@ -85,8 +85,8 @@ sudo sashiki init --pool dbpool --device /dev/nvme1n1   # デバイス名は lsb
 ### 3. baseline(元データ)を入れる
 
 ```bash
-# ダンプから baseline を作る(投入 → 正常終了 → snapshot 取得まで)
-sashiki baseline import --from prod-dump.sql
+# ダンプから baseline を作る(投入 → 正常終了 → snapshot 取得まで)。ZFS 操作のため root
+sudo sashiki baseline import --from prod-dump.sql
 ```
 
 baseline は **build → validate → publish** の 3 段階。検証に落ちた候補は current にならないので、
@@ -117,7 +117,10 @@ mysql -udev@pr-1 -p -h 127.0.0.1 -P3306   # :3306 固定エンドポイント経
 ```
 
 パスワードは `init` がランダム生成して表示したもの(`/etc/sashiki/config.yaml` の `app_pass`)。
-固定したいときは `sudo sashiki init --app-pass <値>`。macOS ネイティブとコンテナは開発用途なので既定 `dev` のまま。
+固定したいときは**手順 2 の `init` に `--app-pass <値>` を付ける**(config があると `init` は
+生成ステップを飛ばすので後から付けても効かない。後から変えるなら config の `app_pass` と
+baseline 内のユーザーのパスワードを両方変える)。macOS ネイティブとコンテナは開発用途なので
+既定 `dev`(`init --app-pass` で変更可)。
 
 ### macOS ネイティブ(VM 無し)
 
@@ -140,7 +143,9 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306
 `init --platform darwin` は root 不要。既定のルートは `~/Library/Application Support/sashiki`
 (Postgres は `sashiki-pg`、API は `:8081` なので MySQL 版と同時に常駐できる。`--root` で変更可)。`baseline import` / `token` などの CLI は
 そこにある `config.yaml` を自動で使う(`--config` / `SASHIKI_CONFIG` で上書き可)ので、
-Linux 手順と同じコマンドがそのまま通る。`init` が作った空の baseline は残り、
+Linux 手順と同じコマンドがそのまま通る。ただし **MySQL 版と Postgres 版を両方 init した場合や
+`--root` を変えた場合は自動検出しない**ので、`--config <path>` か `SASHIKI_CONFIG` で指定する。
+`init` が作った空の baseline は残り、
 `baseline import --from dump.sql` は新しい tag で取って current を切り替える。
 `sashiki token` も darwin では root 不要。詳細と Lima/worktree 連動は [docs/LOCAL-DEV.md](docs/LOCAL-DEV.md)。
 

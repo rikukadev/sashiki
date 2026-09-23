@@ -54,6 +54,12 @@ func cmdInitDarwin(opts initOpts) int {
 		return exitError
 	}
 	configPath := filepath.Join(root, "config.yaml")
+	// --app-pass は darwin でも効く(#324: テンプレートが dev 固定で無視されていた)。
+	// 開発用途なので既定は dev のまま。
+	appPass := opts.appPass
+	if appPass == "" {
+		appPass = "dev"
+	}
 	logDir := filepath.Join(root, "log")
 	baseData := filepath.Join(root, "base", "data")
 	baseline := filepath.Join(root, "base", "snap", "baseline")
@@ -105,7 +111,7 @@ func cmdInitDarwin(opts initOpts) int {
 		{
 			name: "baseline に app ユーザー(dev)を作成",
 			done: func() bool { _, err := os.Stat(baseline); return err == nil },
-			run:  func() error { return provisionDevUser(mysqldBin, baseData) },
+			run:  func() error { return provisionDevUser(mysqldBin, baseData, appPass) },
 		},
 		{
 			name: "baseline snapshot を取得 (clonefile)",
@@ -123,7 +129,8 @@ func cmdInitDarwin(opts initOpts) int {
 			name: "config.yaml 生成",
 			done: func() bool { _, err := os.Stat(configPath); return err == nil },
 			run: func() error {
-				data, err := renderTmpl(configDarwinTmpl, map[string]string{"Root": root, "MysqldBin": mysqldBin})
+				data, err := renderTmpl(configDarwinTmpl, map[string]string{
+					"Root": root, "MysqldBin": mysqldBin, "AppPass": yamlQuote(appPass)})
 				if err != nil {
 					return err
 				}
@@ -174,10 +181,12 @@ init 完了 (darwin)。sashikid は launchd で常駐しています。
   ブランチ:  sashiki create pr-1
   停止:      launchctl unload ~/Library/LaunchAgents/dev.sashiki.sashikid.plist
 
-本番相当のデータを入れるなら(root 不要、--config も不要):
+本番相当のデータを入れるなら(root 不要):
   sashiki baseline import --from dump.sql
-  (init が作った空の baseline は残り、新しい tag で取って current を切り替える)
-`)
+  (config は %s を自動で使う。Postgres 版(sashiki-pg)も併存するか --root を変えた
+   ときは --config <path> か SASHIKI_CONFIG で指定する。init が作った空の baseline は
+   残り、新しい tag で取って current を切り替える)
+`, configPath)
 	return exitOK
 }
 
@@ -235,7 +244,7 @@ func resolveSashikid() (string, error) {
 // と app データベースを作り、正常終了する。方式A プロキシは dev/dev で backend に
 // 繋ぐため、baseline に dev ユーザーが必要(#119)。socket のみ(--skip-networking)で
 // 一時起動するのでポート競合しない。
-func provisionDevUser(mysqldBin, baseData string) error {
+func provisionDevUser(mysqldBin, baseData, appPass string) error {
 	sock := "/tmp/sashiki-init.sock"
 	pid := filepath.Join(baseData, "init.pid")
 	_ = os.Remove(sock)
@@ -274,9 +283,9 @@ func provisionDevUser(mysqldBin, baseData string) error {
 		// server 未 ready の間は既定 caching_sha2 が返り CREATE も失敗するので retry で回る。
 		plugin := authPluginFor(client, sock)
 		sql := fmt.Sprintf(
-			"CREATE USER IF NOT EXISTS 'dev'@'%%' IDENTIFIED WITH %s BY 'dev';"+
+			"CREATE USER IF NOT EXISTS 'dev'@'%%' IDENTIFIED WITH %s BY %s;"+
 				"GRANT ALL PRIVILEGES ON *.* TO 'dev'@'%%' WITH GRANT OPTION;"+
-				"CREATE DATABASE IF NOT EXISTS app;FLUSH PRIVILEGES;", plugin)
+				"CREATE DATABASE IF NOT EXISTS app;FLUSH PRIVILEGES;", plugin, mysqlLiteral(appPass))
 		out, err := exec.Command(client, "--socket="+sock, "-uroot", "-e", sql).CombinedOutput()
 		if err == nil {
 			return nil

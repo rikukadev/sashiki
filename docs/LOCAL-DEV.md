@@ -50,8 +50,8 @@ sudo sashiki init --pool tank --device /var/tmp/sashiki.img
 ### 3. baseline(元データ)を入れる(VM 内)
 
 ```bash
-# 手元の本番相当ダンプを VM に渡してから
-sashiki baseline import --from /path/to/dump.sql
+# 手元の本番相当ダンプを VM に渡してから(ZFS 操作のため root)
+sudo sashiki baseline import --from /path/to/dump.sql
 sudo systemctl enable --now sashikid
 ```
 

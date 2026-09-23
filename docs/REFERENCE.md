@@ -42,7 +42,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 
 | コマンド | 何をするか |
 |---|---|
-| `baseline import --from <src>` | 初回の baseline を作る。`<src>` は SQL ファイル / ディレクトリ(`*.sql` を並列投入)/ `s3://…` / `-`(標準入力)。Postgres は `pg_dump` のカスタム形式・ディレクトリ形式も自動判定。`--db <name>` / `--import-cnf <my.cnf>` / `--threads N` / `--config <path>` |
+| `baseline import --from <src>` | 初回の baseline を作る。Linux(ZFS)は root で実行する(`sudo`)。macOS ネイティブは不要。`<src>` は SQL ファイル / ディレクトリ(`*.sql` を並列投入)/ `s3://…` / `-`(標準入力)。Postgres は `pg_dump` のカスタム形式・ディレクトリ形式も自動判定。`--db <name>` / `--import-cnf <my.cnf>` / `--threads N` / `--config <path>` |
 | `baseline list [--json]` | 登録済み snapshot と current |
 | `baseline refresh` | `refresh_script` か `source_dir` で作り直す(開始だけ返す) |
 | `baseline build` / `validate <snap>` / `publish <snap>` / `delete <snap>` | 段階ごとに実行する |
@@ -56,7 +56,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 
 | コマンド | 何をするか |
 |---|---|
-| `init` | ホストを構成する。`--pool <p>` / `--device <dev>` / `--engine mysql\|postgres` / `--app-pass <pw>`(省略時はランダム生成)/ `--platform darwin`(既定は実行中の OS)/ `--root <dir>`(darwin)/ `--skip-packages` / `--yes` |
+| `init` | ホストを構成する。`--pool <p>` / `--device <dev>` / `--engine mysql\|postgres` / `--app-pass <pw>`(省略時: Linux はランダム生成、darwin は `dev`。config が既にあると無視される)/ `--platform darwin`(既定は実行中の OS)/ `--root <dir>`(darwin)/ `--skip-packages` / `--yes` |
 | `token create --name <n> [--scope branches\|admin]` / `token list` / `token revoke <n>` | API トークン。既定 scope は `branches` |
 | `op list` / `op show <id>` / `op wait <id>` | operation(直近 50 件) |
 | `capacity` / `doctor` | 容量とヘルスチェック(読み取りのみ) |

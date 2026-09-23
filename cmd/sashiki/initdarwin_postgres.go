@@ -45,6 +45,11 @@ func cmdInitDarwinPostgres(opts initOpts) int {
 		return exitError
 	}
 	configPath := filepath.Join(root, "config.yaml")
+	// --app-pass は darwin でも効く(#324)。開発用途なので既定は dev のまま。
+	appPass := opts.appPass
+	if appPass == "" {
+		appPass = "dev"
+	}
 	logDir := filepath.Join(root, "log")
 	baseData := filepath.Join(root, "base", "data")
 	baseline := filepath.Join(root, "base", "snap", "baseline")
@@ -109,7 +114,7 @@ func cmdInitDarwinPostgres(opts initOpts) int {
 				return withTempPostgres(binDir, baseData, logDir, func() error {
 					if err := runOutEnv(env, pgBinOf("psql"), "-w", "-v", "ON_ERROR_STOP=1",
 						"-d", "postgres", "-c",
-						"CREATE ROLE "+quoteIdent("dev")+" LOGIN SUPERUSER PASSWORD "+quoteLiteral("dev")); err != nil {
+						"CREATE ROLE "+quoteIdent("dev")+" LOGIN SUPERUSER PASSWORD "+quoteLiteral(appPass)); err != nil {
 						return err
 					}
 					return runOutEnv(env, pgBinOf("psql"), "-w", "-v", "ON_ERROR_STOP=1",
@@ -132,7 +137,7 @@ func cmdInitDarwinPostgres(opts initOpts) int {
 			done: func() bool { _, err := os.Stat(configPath); return err == nil },
 			run: func() error {
 				data, err := renderTmpl(configDarwinPostgresTmpl,
-					map[string]string{"Root": root, "PgBinDir": binDir})
+					map[string]string{"Root": root, "PgBinDir": binDir, "AppPass": yamlQuote(appPass)})
 				if err != nil {
 					return err
 				}
@@ -187,14 +192,16 @@ init 完了 (darwin/postgres)。sashikid は launchd で常駐しています(AP
   export SASHIKI_API_URL=http://127.0.0.1:8081
 
   ブランチ:  sashiki create pr-1
-  接続:      PGPASSWORD=dev psql -h 127.0.0.1 -p 5432 -U 'dev@pr-1' -d app
+  接続:      PGPASSWORD=%s psql -h 127.0.0.1 -p 5432 -U 'dev@pr-1' -d app
              (未作成のブランチでも、接続した時点で作られる)
   停止:      launchctl unload ~/Library/LaunchAgents/dev.sashiki.sashikid-pg.plist
 
 本番相当のデータを入れるなら(root 不要、ログインユーザーで実行):
   sashiki baseline import --from dump.sql --db app
-  (config は %s を自動で使う。init が作った baseline は残り、新しい tag で current を切り替える)
-`, configPath)
+  (config は %s を自動で使う。MySQL 版(sashiki)も併存するか --root を変えたときは
+   --config <path> か SASHIKI_CONFIG で指定する。init が作った baseline は残り、
+   新しい tag で current を切り替える)
+`, appPass, configPath)
 	return exitOK
 }
 

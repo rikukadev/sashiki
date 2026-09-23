@@ -23,7 +23,7 @@ engine:
     sudo: false              # ログインユーザーで mysqld を起動(sudo 不要)
     port_range: [3401, 3600]
     app_user: dev
-    app_pass: dev
+    app_pass: {{.AppPass}}
     # macOS の APFS は既定で case-insensitive で、mysqld 自身がそれを検出して
     # lower_case_table_names=2 で動く(sashiki は設定しない。init と runtime は同じ
     # ボリュームなので一致する)。
