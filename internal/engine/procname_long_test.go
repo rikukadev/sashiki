@@ -30,7 +30,9 @@ func TestProcessIsLongName(t *testing.T) {
 	if match, known := ProcessIs(cmd.Process.Pid, long); !known || !match {
 		t.Errorf("long name: match=%v known=%v", match, known)
 	}
-	if match, known := ProcessIs(cmd.Process.Pid, "mysqld-wrapper-with-another-name"); known && match {
+	// Linux の comm は先頭 15 文字なので、その範囲で違う名前と比べる(同じ prefix の
+	// 別名は区別できないのが仕様)。
+	if match, known := ProcessIs(cmd.Process.Pid, "another-wrapper-with-a-long-name"); known && match {
 		t.Error("a different long name must not match")
 	}
 }

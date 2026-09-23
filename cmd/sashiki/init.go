@@ -96,6 +96,14 @@ func cmdInit(args []string) int {
 			return usage()
 		}
 	}
+	// --engine の検証は root 検査より前に行う(#325: 非 root だと「root で実行して
+	// ください」が先に出て、引数エラーなのに終了コードが 1 になっていた)。
+	switch opts.engine {
+	case "", "mysql", "postgres":
+	default:
+		fmt.Fprintf(os.Stderr, "sashiki init: --engine %q は未対応です (mysql | postgres)\n", opts.engine)
+		return exitUsage
+	}
 	if opts.platform == "darwin" {
 		return cmdInitDarwin(opts)
 	}
