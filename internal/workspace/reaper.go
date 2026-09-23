@@ -54,7 +54,7 @@ func (m *Manager) Reap(ctx context.Context) error {
 		if b.ExpiresAt != nil && now.After(*b.ExpiresAt) && reapable {
 			backing, berr := m.backingBaselinesForBranch(ctx, b)
 			if berr != nil {
-				log.Printf("reaper: baseline protection check %s: %v (保護)", b.Name, berr)
+				m.reapLogOnce(b.Name, fmt.Sprintf("reaper: baseline protection check %s: %v (保護)", b.Name, berr))
 				continue
 			}
 			if len(backing) > 0 {
@@ -119,7 +119,7 @@ func (m *Manager) Reap(ctx context.Context) error {
 		if deleteDue {
 			backing, berr := m.backingBaselinesForBranch(ctx, b)
 			if berr != nil {
-				log.Printf("reaper: baseline protection check %s: %v (保護)", b.Name, berr)
+				m.reapLogOnce(b.Name, fmt.Sprintf("reaper: baseline protection check %s: %v (保護)", b.Name, berr))
 				continue
 			}
 			if len(backing) > 0 {
