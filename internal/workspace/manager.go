@@ -995,19 +995,29 @@ func (m *Manager) CheckBranchMutation(ctx context.Context, name, verb string) er
 	if err != nil {
 		return err
 	}
-	vol, err := m.resolveVolume(ctx, b)
+	// volume が無ければ baseline も乗っていない。ここで resolveVolume の失敗を
+	// 返すと 500 になり、dataset_missing の error ブランチを `sashiki delete` で
+	// 掃除できなくなる(Delete 本体は volume 欠損なら行だけ消す設計、#319)。
+	backing, err := m.backingBaselinesForBranch(ctx, b)
 	if err != nil {
 		return err
 	}
-	return m.refuseIfBackingBaseline(name, vol, verb)
+	if len(backing) > 0 {
+		return fmt.Errorf("%w: branch %q は baseline %v の実体を保持しています。"+
+			"%s すると current baseline が壊れるため拒否しました。"+
+			"先に別の baseline を promote/set してください", ErrPreconditionFailed, name, backing, verb)
+	}
+	return nil
 }
 
 // backingBaselinesForBranch は branch の実体上にある登録済み baseline を返す。
 // reaper は破壊を試して毎 tick 失敗する前にこれを使い、停止だけへ切り替える。
+// volume が見つからなければ「乗っている baseline は無い」(nil, nil)。error を
+// 返すのは台帳(ListBaselines)が読めないときだけで、呼び出し側はそれを保護に倒す。
 func (m *Manager) backingBaselinesForBranch(ctx context.Context, b state.Branch) ([]string, error) {
 	vol, err := m.resolveVolume(ctx, b)
 	if err != nil {
-		return nil, err
+		return nil, nil
 	}
 	return m.baselinesOnDataset(vol.Dataset)
 }

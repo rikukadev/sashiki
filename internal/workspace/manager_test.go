@@ -34,6 +34,7 @@ type mockStorage struct {
 	rollbackErr      error
 	promoteErr       error
 	quota            map[string]int64 // #85: SetQuota で記録
+	missing          map[string]bool  // #319: ResolveVolume を失敗させる branch
 }
 
 func (m *mockStorage) SetQuota(ctx context.Context, vol storage.Volume, bytes int64) error {
@@ -55,6 +56,9 @@ func (m *mockStorage) Clone(ctx context.Context, baseline storage.SnapshotRef, n
 }
 
 func (m *mockStorage) ResolveVolume(ctx context.Context, name string) (storage.Volume, error) {
+	if m.missing[name] {
+		return storage.Volume{}, errors.New("dataset does not exist")
+	}
 	return storage.Volume{Name: name, Dataset: "pool/branches/" + name, Path: "/pool/branches/" + name}, nil
 }
 
