@@ -724,6 +724,11 @@ func (s *Server) handleSleep(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	// reset / recreate / delete と同じく、存在確認と promote 元の保護は operation を
+	// 作る前に同期で返す(#323: retry だけ 202 → op failed で、404 が CLI の 1 になっていた)。
+	if !s.checkBranchMutation(w, r, name, "retry") {
+		return
+	}
 	s.accepted(w, "retry", name, func(ctx context.Context) error {
 		_, e := s.mgr.Retry(ctx, name)
 		return e

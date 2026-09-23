@@ -95,7 +95,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 | `GET /v1/branches` | 200 | 一覧(ページングなし) |
 | `POST /v1/branches` | 202 / 200 / 409 | body `{name, port?, profile?, owner?, purpose?, source?, ttl?, baseline?}`。`?exist_ok=true` なら既存を 200 で返す |
 | `GET /v1/branches/{name}` | 200 / 404 | |
-| `POST /v1/branches/{name}/reset` \| `/recreate` \| `/retry` | 202 | 412 = promote 元、409 = 実行中の操作あり |
+| `POST /v1/branches/{name}/reset` \| `/recreate` \| `/retry` | 202 | 404 / 412(promote 元)は同期で返す。409 = 実行中の操作あり |
 | `DELETE /v1/branches/{name}` | 202 | 404 / 412 は同期で返す |
 | `POST /v1/branches/{name}/sleep` \| `/wake` | 200 | 同期 |
 | `POST /v1/branches/{name}/lease` | 200 | body `{for: "7d"}` |
