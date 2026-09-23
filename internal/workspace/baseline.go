@@ -59,6 +59,11 @@ func (m *Manager) PromoteBranch(ctx context.Context, name string, opts PromoteOp
 	if err != nil {
 		return "", err
 	}
+	// error / 遷移中の datadir を baseline にはしない(#322: error ブランチを promote
+	// した後の retry で baseline 実体を destroy -r できていた)。
+	if b.State != state.StateRunning && b.State != state.StateSleeping {
+		return "", fmt.Errorf("%w: branch %s is %s (promote には running / sleeping が要る)", ErrPreconditionFailed, name, b.State)
+	}
 	vol, err := m.resolveVolume(ctx, b)
 	if err != nil {
 		return "", err

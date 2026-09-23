@@ -77,6 +77,11 @@ func NewRunner(dir, logDir string, timeout time.Duration) *Runner {
 	}
 }
 
+// BaseEnv は hook に渡す土台の環境(sashikid の環境から StripEnv を除いたもの)。
+// baseline の refresh スクリプトなど、Runner.Run を通らずに外部コマンドを起動する
+// 経路も同じものを使う(#321: refresh_script に API トークンが渡っていた)。
+func (r *Runner) BaseEnv() []string { return r.inheritedEnv() }
+
 // inheritedEnv は sashikid の環境から StripEnv を除いたものを返す。
 func (r *Runner) inheritedEnv() []string {
 	strip := map[string]bool{}

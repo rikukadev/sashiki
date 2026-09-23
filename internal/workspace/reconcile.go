@@ -43,8 +43,10 @@ func (m *Manager) reconcile(ctx context.Context, mutate bool) (ReconcileReport, 
 		return rep, err
 	}
 	known := map[string]bool{}
+	states := map[string]string{}
 	for _, b := range branches {
 		known[b.Name] = true
+		states[b.Name] = b.State
 
 		// 遷移中状態(creating/resetting/deleting)で残っている = 再起動で中断された
 		// 残骸。sashikid は単一プロセスなので起動時に正当な mid-operation は無い(#53
@@ -71,6 +73,12 @@ func (m *Manager) reconcile(ctx context.Context, mutate bool) (ReconcileReport, 
 			op := "create"
 			if b.State == state.StateResetting {
 				op = "reset"
+				// 退避名 <name>-recreating が残っていれば recreate の中断(#322)。
+				// reset として retry すると新 clone に @init が無く rollback が
+				// 失敗し続けるので、recreate としてやり直す。
+				if _, serr := m.resolveVolume(ctx, state.Branch{Name: b.Name + RecreatingSuffix}); serr == nil {
+					op = "recreate"
+				}
 			}
 			_ = m.db.SetError(b.Name, op, "interrupted", true,
 				op+" が再起動で中断されました",
@@ -104,6 +112,14 @@ func (m *Manager) reconcile(ctx context.Context, mutate bool) (ReconcileReport, 
 		vols, verr := vl.ListBranchVolumes(ctx)
 		if verr == nil {
 			for _, name := range vols {
+				// recreate の退避名は、元ブランチが resetting / error(やり直し待ち)
+				// でなければ残骸(#322: delete 後に永久リークしていた)。
+				if base, ok := strings.CutSuffix(name, RecreatingSuffix); ok {
+					if st, has := states[base]; !has || (st != state.StateResetting && st != state.StateError) {
+						rep.Orphans = append(rep.Orphans, name)
+					}
+					continue
+				}
 				// 予約名(_validate 等)は orphan 扱いしない(state.db 非登録でも正当)。
 				if IsReserved(name) {
 					continue

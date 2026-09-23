@@ -537,20 +537,22 @@ func (m *Manager) recreateFrom(ctx context.Context, b state.Branch, origin stora
 	// 固定名バックエンド(ebs-zfs)は新旧が同名で共存できないため、旧を一時名へ
 	// 退避してから clone する。clone 失敗時は退避を戻して原状復帰する。
 	renamer, needSwap := m.st.(storage.Renamer)
-	swapName := ""
-	if hasOld && !m.st.Capabilities().ClonesAreDistinct && needSwap {
-		swapName = b.Name + RecreatingSuffix
-		// 前回の recreate が途中で落ちていると退避名が残っている。その中身は
-		// 前々回のデータで、今回も捨てる対象なので先に片付ける(残したままだと
-		// Rename が衝突して retry が永遠に通らない、#292)。error からの
-		// やり直しのときだけ見る(通常の recreate では残っていない)。
-		if b.State == state.StateError {
-			if stale, serr := m.resolveVolume(ctx, state.Branch{Name: swapName}); serr == nil {
-				if job, derr := m.st.DeleteAsync(ctx, stale); derr == nil {
-					_, _ = m.st.Poll(ctx, job)
-				}
+	fixedName := !m.st.Capabilities().ClonesAreDistinct && needSwap
+	// 前回の recreate が途中で落ちていると退避名が残っている。その中身は
+	// 前々回のデータで、今回も捨てる対象なので先に片付ける(残したままだと
+	// Rename が衝突して retry が永遠に通らない、#292)。error からのやり直しの
+	// ときだけ見る。旧 volume が無い経路(clone 失敗後)でも残っていることが
+	// あるので hasOld に関係なく見る(#322)。
+	if fixedName && b.State == state.StateError {
+		if stale, serr := m.resolveVolume(ctx, state.Branch{Name: b.Name + RecreatingSuffix}); serr == nil {
+			if job, derr := m.st.DeleteAsync(ctx, stale); derr == nil {
+				_, _ = m.st.Poll(ctx, job)
 			}
 		}
+	}
+	swapName := ""
+	if hasOld && fixedName {
+		swapName = b.Name + RecreatingSuffix
 		stashed, rerr := renamer.Rename(ctx, oldVol, swapName)
 		if rerr != nil {
 			return fail("stash", fmt.Errorf("recreate stash: %w", rerr))
@@ -894,10 +896,12 @@ func (m *Manager) Wake(ctx context.Context, name string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	if b.State != state.StateSleeping && b.State != state.StateRunning {
+	// wake の失敗で error になったものは retry で起こし直せる(#322)。
+	retrying := b.State == state.StateError && b.FailedOp == "wake"
+	if b.State != state.StateSleeping && b.State != state.StateRunning && !retrying {
 		return Info{}, fmt.Errorf("branch %s is %s (cannot wake)", name, b.State)
 	}
-	if b.State == state.StateSleeping {
+	if b.State == state.StateSleeping || retrying {
 		if err := m.admitMemory("wake"); err != nil {
 			return Info{}, err
 		}
@@ -911,11 +915,13 @@ func (m *Manager) Wake(ctx context.Context, name string) (Info, error) {
 	}
 	ins := m.instance(b, vol)
 	if running, _ := m.eng.IsRunning(ctx, ins); !running {
+		// 起動失敗は failed_operation=wake で残す(#322: 以前は記録せず、README の
+		// 「wake も retry できる」が到達不能だった)。
 		if err := m.eng.Start(ctx, ins); err != nil {
-			return Info{}, err
+			return Info{}, m.failOp(name, "wake", "engine-start", err)
 		}
 		if err := m.eng.WaitReady(ctx, ins); err != nil {
-			return Info{}, err
+			return Info{}, m.failOp(name, "wake", "engine-ready", err)
 		}
 	}
 	if err := m.db.SetState(name, state.StateRunning, ""); err != nil {
