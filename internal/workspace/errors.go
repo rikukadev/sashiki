@@ -44,7 +44,7 @@ func classify(stage string, err error) (code string, recoverable bool, suggestio
 		return CodeSnapshotError, false, []string{
 			"datadir を掴んだままのプロセスが無いか確認",
 		}
-	case stage == "rollback", stage == "stash", stage == "quota", stage == "stop":
+	case stage == "rollback", stage == "stash", stage == "quota", stage == "stop", stage == "engine-stop", stage == "storage":
 		// reset / recreate の途中段階(#292)。どれも作業をやり直せば整う:
 		// rollback は冪等、stash(rename 退避)は失敗しても旧が残る、stop は
 		// retry 時に Kill する。
@@ -85,10 +85,32 @@ func (m *Manager) Retry(ctx context.Context, name string) (Info, error) {
 		return m.Wake(ctx, name)
 	case "create":
 		// 失敗した create は残骸を掃除して origin から作り直す(recreate 相当)。
-		return m.recreateFrom(ctx, b, storage.SnapshotRef(b.OriginSnapshot), hooks.OnCreate, "create")
+		// Reset / Recreate と同じく branch lock と promote-guard を通す(#322:
+		// 以前は直呼びで、reaper の Delete と並走したり、promote 済みの実体を
+		// destroy -r できた)。
+		return m.retryCreate(ctx, name)
 	default:
 		return Info{}, fmt.Errorf("cannot retry operation %q", b.FailedOp)
 	}
+}
+
+// retryCreate は create の失敗をやり直す。lock 下で状態を読み直し、promote 元なら拒否する。
+func (m *Manager) retryCreate(ctx context.Context, name string) (Info, error) {
+	unlock := m.lock(name)
+	defer unlock()
+	b, err := m.db.GetBranch(name)
+	if err != nil {
+		return Info{}, err
+	}
+	if b.State != state.StateError {
+		return Info{}, fmt.Errorf("branch %s is %s (not in error state)", name, b.State)
+	}
+	if vol, verr := m.resolveVolume(ctx, b); verr == nil {
+		if err := m.refuseIfBackingBaseline(name, vol, "retry"); err != nil {
+			return Info{}, err
+		}
+	}
+	return m.recreateFrom(ctx, b, storage.SnapshotRef(b.OriginSnapshot), hooks.OnCreate, "create")
 }
 
 // RunHookManually は指定 event の hook だけを再実行する(仕様 11-1: sashiki hooks run)。

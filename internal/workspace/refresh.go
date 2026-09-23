@@ -184,7 +184,8 @@ func (m *Manager) buildCandidate(ctx context.Context, rc RefreshConfig, tag stri
 		}
 	} else {
 		cmd := exec.CommandContext(ctx, rc.Script)
-		cmd.Env = append(os.Environ(),
+		// hooks と同じ土台の環境(API トークンは渡さない、#321)。
+		cmd.Env = append(m.scriptBaseEnv(),
 			"SASHIKI_EVENT=baseline-build",
 			"SASHIKI_BASELINE_TAG="+tag,
 		)
@@ -492,4 +493,13 @@ func (m *Manager) runSourceLoader(ctx context.Context, rc RefreshConfig) error {
 	}
 	log.Printf("baseline refresh: source loader applied %d file(s): %v", len(applied), applied)
 	return nil
+}
+
+// scriptBaseEnv は外部スクリプトに渡す土台の環境。hooks.Runner が配線されていれば
+// その StripEnv(API トークン等)を適用し、無ければ既定の Runner と同じ扱いにする。
+func (m *Manager) scriptBaseEnv() []string {
+	if m.hooks != nil {
+		return m.hooks.BaseEnv()
+	}
+	return hooks.NewRunner("", "", 0).BaseEnv()
 }

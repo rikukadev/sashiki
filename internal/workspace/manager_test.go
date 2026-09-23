@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -57,6 +58,10 @@ func (m *mockStorage) Clone(ctx context.Context, baseline storage.SnapshotRef, n
 
 func (m *mockStorage) ResolveVolume(ctx context.Context, name string) (storage.Volume, error) {
 	if m.missing[name] {
+		return storage.Volume{}, errors.New("dataset does not exist")
+	}
+	// recreate の退避名は、volumes に列挙されているときだけ「残っている」扱い(#322)。
+	if strings.HasSuffix(name, RecreatingSuffix) && !slices.Contains(m.volumes, name) {
 		return storage.Volume{}, errors.New("dataset does not exist")
 	}
 	return storage.Volume{Name: name, Dataset: "pool/branches/" + name, Path: "/pool/branches/" + name}, nil
