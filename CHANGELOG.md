@@ -7,6 +7,22 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.11.1](https://github.com/rikukadev/sashiki/compare/v0.11.0...v0.11.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **init:** --pool 省略時は既存 config の pool を使い、zpool の確認を AppArmor / sudoers より先にする ([#320](https://github.com/rikukadev/sashiki/issues/320)) ([#332](https://github.com/rikukadev/sashiki/issues/332)) ([07302d6](https://github.com/rikukadev/sashiki/commit/07302d622e47c593bad6b857d3375077a2a6e981))
+* **proxy:** 認証試行のスロットを検証の間だけ握り、同一 IP の同時セッション上限を無くす ([#318](https://github.com/rikukadev/sashiki/issues/318)) ([#330](https://github.com/rikukadev/sashiki/issues/330)) ([d99c674](https://github.com/rikukadev/sashiki/commit/d99c6740ba11e0403adb8f399149fdb95e3d50a0))
+* README 再監査(audit 2)の Medium を修正する ([#335](https://github.com/rikukadev/sashiki/issues/335)) ([b3868b9](https://github.com/rikukadev/sashiki/commit/b3868b92aad531c3622dc3f27612453e0a7a5f51))
+* **workspace:** retry の create 経路を lock / promote-guard に通し、中断された recreate と wake の失敗を復旧できるようにする ([#321](https://github.com/rikukadev/sashiki/issues/321), [#322](https://github.com/rikukadev/sashiki/issues/322)) ([#333](https://github.com/rikukadev/sashiki/issues/333)) ([733565d](https://github.com/rikukadev/sashiki/commit/733565db9051a6eb71a563068908b20c37a583de))
+* **workspace:** volume が無い error ブランチを API と reaper で削除できるようにする ([#319](https://github.com/rikukadev/sashiki/issues/319)) ([#331](https://github.com/rikukadev/sashiki/issues/331)) ([6849c1e](https://github.com/rikukadev/sashiki/commit/6849c1e0e83143d406676f518c3c7f4e644b5bff))
+
+
+### Documentation
+
+* ドキュメント間の食い違いを実装に合わせる(REFERENCE / SPEC / terraform README / LOCAL-DEV / 古いコメント) ([#336](https://github.com/rikukadev/sashiki/issues/336)) ([0b5fa45](https://github.com/rikukadev/sashiki/commit/0b5fa45962d0572202e36df24958216865f60e1f)), closes [#328](https://github.com/rikukadev/sashiki/issues/328)
+
 ## [0.11.0](https://github.com/rikukadev/sashiki/compare/v0.10.0...v0.11.0) (2026-09-22)
 
 
