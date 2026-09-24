@@ -8,7 +8,9 @@ private + 無料プランではブランチ保護ルールセットが使えな�
 
 - **直 push 禁止**(PR 経由のみ)
 - **PR 必須**、マージ前に **1 レビュー承認**(単独運用なら 0 でも可)
-- **required status checks = `test` / `lint` / `e2e`**(strict: 最新 main で通っていること)
+- **required status checks = `test` / `lint` / `e2e`**(strict: 最新 main で通っていること)。
+  `install-sh` / `action-ssm` も軽く決定的なので required にしてよい。`e2e-aws` / `e2e-postgres` /
+  `vuln` は advisory(実 AWS・安定化待ち・新規 CVE で無関係な PR を止めないため。基準は SPEC 27 章)
 - **force push 禁止 / 削除禁止**
 - **会話の解決を必須**(require conversation resolution)
 - 任意: **linear history**(squash マージ運用と相性が良い)

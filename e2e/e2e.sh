@@ -480,6 +480,34 @@ grep -q e2e-test <<<"$(sashiki token list)" || fail "token list"
 sashiki token revoke e2e-test || fail "token revoke"
 grep -q e2e-test <<<"$(sashiki token list)" && fail "token should be revoked"
 
+# 仕様 27 章の OOM シナリオ: max_running=2 で 3 本目の create が limit_reached(507 →
+# 終了コード 5)で拒否され、既存の 2 本は影響を受けない(#282)。
+log "max_running admission: 3 本目は limit_reached (#282)"
+kill $SASHIKID_PID 2>/dev/null || true
+sleep 1
+sed -i "/^    port_range: \[3401, 3410\]/a\    max_running: 2" /etc/sashiki/config.yaml
+grep -q "^    max_running: 2" /etc/sashiki/config.yaml || fail "config に max_running を入れられなかった"
+/usr/local/bin/sashikid --config /etc/sashiki/config.yaml > /var/log/sashiki/sashikid-maxrun.log 2>&1 &
+SASHIKID_PID=$!
+sleep 1
+sashiki create pr-run1 > /dev/null || fail "max_running: pr-run1"
+sashiki create pr-run2 > /dev/null || fail "max_running: pr-run2"
+set +e
+out=$(sashiki create pr-run3 2>&1); rc=$?
+set -e
+# admission は operation の中で判定されるので、CLI は operation 失敗として 1 を返し、
+# メッセージに limit reached / max_running が出る(同期の 507 → 5 は create 前の判定だけ)。
+[ $rc -eq 1 ] || fail "max_running: 3 本目は operation 失敗(終了コード 1)のはず (got $rc: $out)"
+grep -q "limit reached\|max_running" <<<"$out" || fail "max_running: エラーに理由が無い: $out"
+grep -q pr-run3 <<<"$(sashiki list)" && fail "max_running: 拒否されたブランチが残っている"
+[ "$(mysql -udev@pr-run1 -pdev -h127.0.0.1 -P3306 -N -e 'SELECT 1' 2>/dev/null)" = "1" ] || fail "max_running: 既存ブランチが巻き込まれた"
+# sleeping にすれば枠が空いて 3 本目が通る(running だけを数える)
+sashiki sleep pr-run1 > /dev/null || fail "max_running: sleep pr-run1"
+sashiki create pr-run3 > /dev/null || fail "max_running: sleeping が枠を空けるはず"
+for b in pr-run1 pr-run2 pr-run3; do sashiki delete $b > /dev/null; done
+sed -i "/^    max_running: 2/d" /etc/sashiki/config.yaml
+echo "  3 本目は limit_reached / sleeping で枠が空く"
+
 log "idle stop & TTL (リーパー)"
 # 短い閾値で sashikid を再起動
 kill $SASHIKID_PID 2>/dev/null || true

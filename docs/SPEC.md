@@ -419,10 +419,10 @@ type Storage interface {
 
 ### 15-4. backend の位置づけ
 
-|  |ebs-zfs(**default**)                     |fsx-zfs                                                             |local-zfs(将来)        |
+|  |ebs-zfs(**default**)                     |fsx-zfs                                                             |apfs / reflink(local)  |
 |--|-----------------------------------------|--------------------------------------------------------------------|---------------------|
-|特徴|fast / simple / interactive / single-host|shared / host-independent / multi-host / control-plane latency heavy|fastest / laptop / VM|
-|向く|sandbox、migration 検証、CI、PR Preview、秒 UX  |host 使い捨て、Spot、複数 host、1 台の RAM 限界超え、PR open に 1〜2 分待てる             |開発者の手元               |
+|特徴|fast / simple / interactive / single-host|shared / host-independent / control-plane latency heavy(multi-host は未着手、#279)|fastest / laptop / container|
+|向く|sandbox、migration 検証、CI、PR Preview、秒 UX  |host 使い捨て、compute replacement、1 台の RAM 限界超え、PR open に 1〜2 分待てる(Spot は未着手) |開発者の手元(macOS ネイティブ / Docker)|
 
 判断軸は「小規模→EBS、大規模→FSx」ではない。**次のどれかが必要になったら FSx**: multi-host / compute replacement / Spot / host 障害と storage の分離 / 1 台の RAM 限界。100 branch あっても running が 5 個なら EBS 1 台で足りる。
 
@@ -966,21 +966,46 @@ Storage ──────── Workspace / Branch Manager ──────�
 |**v0.2**|idle stop / wake、TTL / lease、profile、GitHub Action、プレビュー環境連携(port 渡し)                                                                                                                                                             |30 分放置で sleeping、`wake` で復帰。PR open/close で create/delete。7 日で自動削除                                                                                          |
 |**v0.3**|baseline automation(merge / nightly トリガーは examples/baseline-refresh のテンプレート、mask validation)、Terraform モジュール、observability、sashiki-root-helper、AppArmor プロファイル生成                                                                |`terraform apply` だけで sashikid が動く。夜間 refresh が回る(timer は運用者が置く)。sudoers が zfs 全体を許可していない                                                             |
 |**v0.4**|proxy 方式 A(認証終端)への移行、username routing、認証後 lazy create、Web UI 拡充                                                                                                                                                                   |`mysql -udev@pr-2 -h <host>` で存在しない branch が(認証後に)生えて繋がる                                                                                                    |
-|**v1.x**|fsx-zfs、multi-host、local-zfs profile、Postgres、team quota                                                                                                                                                                            |backend を切り替えてもコアと CLI が変わらない                                                                                                                               |
+|**v1.x**|fsx-zfs(実装済み・本番実績なし)、Postgres(実装済み)。**未着手**: multi-host、Spot、team quota(下の整理を参照)。local-zfs profile は apfs / reflink に置き換えて廃止                                                              |backend を切り替えてもコアと CLI が変わらない                                                                                                                               |
 
 > 注: 実装は歴史的経緯により一部を前倒し済み(proxy 中継・lazy create・fsx・postgres は搭載済み)。
 > 本表は「機能の完成度をどの順で仕様水準に引き上げるか」の指針として読む。進捗は issue #48 参照。
 
 FSx を「完成版」とは扱わない。EBS-ZFS 版を中心に据えて実運用し、multi-host / Spot / host 使い捨て / RAM 限界のどれかが出た時点で fsx-zfs を本命に格上げする。
 
+### v1.x で未着手の項目の扱い(#279)
+
+README の対応表と食い違わないよう、状態と「始めるなら何を決めるか」を書いておく。
+
+| 項目 | 状態 | 始めるときに決めること |
+|---|---|---|
+| **multi-host** | 未着手。state は各ホストの SQLite(`state.db`)で、分散ロック・leader election・共有台帳が無い。fsx-zfs は volume を共有できるが、**複数の sashikid が同じ branch 群を触る設計にはなっていない**(同じ sashikid で backend を混ぜないのと同じく、1 backend = 1 sashikid) | ownership(branch はどの sashikid のものか)、locking(FSx volume の排他)、state store(共有 DB か、ホストごと + 台帳の同期か)、failover(ホスト死亡時に branch を誰が引き取るか)、port / endpoint の解決(proxy が他ホストへ転送するか) |
+| **Spot** | 未着手。Terraform module に `instance_market_options` は無く、interruption の通知を受けて drain する仕組みも無い。**replaceable compute**(#275: data EBS + state.db の永続化、置換後の再 import)までは実装済みで、Spot の前提は揃っている | 2 分前の interruption notice で `drain` → `zpool export` を完了できるか(branch 数と buffer pool 次第)、置換後の再 attach を誰が行うか(ASG + user-data か、手動 apply か)、受け入れ条件は「interruption 後に既存 branch の show / proxy / reset が通る」 |
+| **team quota** | 未着手。team / tenant のモデルが無く、quota は host 全体(`max_branches` / `max_running` / storage watermark)と branch 単位(`default_storage_quota`)だけ | データモデル(token の scope に team を持たせるか、branch の owner で数えるか)、API(create 時の admission と `capacity` の team 別表示)、admission(team 単位の branches / running / bytes) |
+| **local-zfs profile** | **廃止(superseded)**。開発者の手元向けは apfs(macOS)/ reflink(コンテナ)で実現した。config の backend に `local-zfs` は無い | — |
+
+
 -----
 
 ## 27. テスト戦略
 
-- ユニット: `storage` / `engine` をモック。状態遷移、admission、port allocator、reconciler、reset/recreate の分岐を検証。通常の GitHub ランナー
-- engine/mysql: `testcontainers-go` で `mysql:8.0` を起動し Start/StopGracefully/Kill/Ready を実接続で確認
-- E2E: ランナー上の実 ZFS(`truncate -s 8G /tmp/zpool.img && zpool create tpool /tmp/zpool.img`)。主要シナリオ + OOM シナリオ(`max_running` を 2 にして 3 個目が拒否される)+ reconciliation シナリオ(sashikid を kill して再起動)をコード化
-- baseline validate の hook 失敗で publish が阻止されることのテスト
+実装されている層と、CI での扱い(required / advisory)。`.github/workflows/ci.yml` の job 名と一致させる。
+
+| 層 | 何を | どこで | CI |
+|---|---|---|---|
+| ユニット | `storage` / `engine` をモック。状態遷移、admission、port allocator、reconciler、reset / recreate の分岐、proxy の認証(SCRAM / caching_sha2)、root-helper の allowlist | `go test -race ./...`(`test` job) | **required** |
+| engine/mysql の実接続 | Start / StopGracefully / Kill / Ready を**実 mysqld** で確認。当初の `testcontainers-go` + `mysql:8.0` 案は採らない: E2E が実 ZFS 上の実 mysqld で同じ経路を毎回通るため、コンテナで二重に持つ価値がない。ユニット側は fake process と、mysqld があるときだけ動く smoke test | `e2e` job(実 mysqld)+ ユニットの skip 可能 smoke | e2e が **required** |
+| E2E(Linux、実 ZFS) | ランナー上の loopback zpool(`truncate` + `zpool create`)。主要シナリオ(create / reset / recreate / delete / proxy / lazy create / baseline build→validate→publish / refresh / promote / export・import-stream)、**OOM シナリオ**(`max_running: 2` で 3 本目が `limit_reached`、sleeping で枠が空く)、reconciliation(sashikid を kill して再起動)、reaper(idle stop / TTL / 直接接続の保護)、AppArmor enforce、sudoers が root-helper 1 行、hook 失敗 → retry | `e2e/e2e.sh`(`e2e` job) | **required** |
+| E2E(PostgreSQL) | create / reset / delete、pgproxy 経由の lazy create、process モード、reaper、refresh(source_dir) | `e2e/postgres/e2e.sh`(`e2e-postgres` job) | advisory(安定したら required に) |
+| E2E(実 AWS) | deb での導入、実 EBS への init、Action の `transport: ssm`、compute replacement(data EBS の付け替え後に show / proxy / reset) | `e2e/aws/run.sh`(`e2e-aws` job。OIDC ロール、1 run ≈ 数円) | advisory(AWS 障害で無関係な PR を止めない) |
+| E2E(FSx) | clone / reset(作り直し)/ delete、使用量・容量・quota・GC | `e2e/fsx/run.sh` | **手動**(FSx は最小構成でも時間課金。定期実行はしない。FSx の変更を入れた PR で手で回す) |
+| install.sh | 偽の curl で release 資産の取得・checksum 照合。macOS は `/bin/bash` 3.2 | `e2e/install-sh.sh`(`install-sh` job) | required 相当(軽い) |
+| Action(送信の形) | 偽の aws で `transport: ssm` の送信スクリプトを検証 | `e2e/action-ssm.sh`(`action-ssm` job) | required 相当(軽い) |
+| 脆弱性 | `govulncheck` | `vuln` job | advisory(新規 CVE で無関係な PR を止めない) |
+
+required / advisory の基準: **決定的で、外部サービスに依存せず、5 分程度で終わる**ものは required。実 AWS・FSx・
+新規 CVE のように外部要因で落ちるものは advisory(落ちたら見るが merge は止めない)。ブランチ保護の設定は
+docs/BRANCH-PROTECTION.md。
 
 -----
 

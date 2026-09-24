@@ -94,7 +94,7 @@ allowlist ヘルパーで、手で使うものではない。config の `root_he
 | 2 | 使い方が違う(未知のコマンド / フラグ、引数不足) |
 | 3 | 対象が無い(404) |
 | 4 | 既にある / 競合(409。`create` の重複、実行中の操作がある) |
-| 5 | 容量不足(507) |
+| 5 | 容量不足(507)。`create` を受け付ける前の同期判定(port / 上限)で返る。operation の中で判定される admission(`max_running` / メモリ / storage watermark)は operation の失敗として **1** になり、メッセージに `limit reached: max_running …` が出る |
 | 6 | `--wait` / `op wait` が**期限までに終わらなかった**(API エラーや通信断はそれぞれのコードになる) |
 
 ## HTTP API
