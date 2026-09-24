@@ -915,6 +915,11 @@ func (m *Manager) Wake(ctx context.Context, name string) (Info, error) {
 		// admission の判定と running への遷移を create と同じ admitMu で 1 区間にする
 		// (#327: 判定だけ無保護だと同時 wake で max_running を超えられた)。running に
 		// した行は他の判定で数に入る。起動に失敗したら failOp で error に落とす。
+		//
+		// running にするのは engine 起動より前なので、last_conn_at が古いままだと
+		// reaper が「running なのに idle」と見て起動中のブランチを Sleep の対象にし、
+		// 起床直後に止めてしまう(e2e-postgres の「再接続で起床しない」)。wake は
+		// 使用の合図なので、ここで idle の起点も進める。
 		if err := func() error {
 			m.admitMu.Lock()
 			defer m.admitMu.Unlock()
@@ -922,6 +927,9 @@ func (m *Manager) Wake(ctx context.Context, name string) (Info, error) {
 				return err
 			}
 			if err := m.admitStorage(ctx, "wake"); err != nil {
+				return err
+			}
+			if err := m.db.TouchLastConn(name); err != nil {
 				return err
 			}
 			return m.db.SetState(name, state.StateRunning, "")
