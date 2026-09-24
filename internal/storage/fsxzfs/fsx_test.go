@@ -19,10 +19,31 @@ type mockAPI struct {
 	pageSize      int
 	// waitVolumeReady が最初の N 回 IN_PROGRESS を返すシミュレーション
 	pendingUntil int
+	// #278: snapshot 削除 / quota / 容量
+	extraSnaps   []string        // base volume 上に "baseline" 以外で存在する snapshot 名
+	deletedSnaps map[string]bool // DeleteSnapshot 済み(id)
+	quotaGiB     map[string]int32
+	storageGiB   int32
 }
 
 func newMockAPI() *mockAPI {
-	return &mockAPI{volumes: map[string]*types.Volume{}}
+	return &mockAPI{volumes: map[string]*types.Volume{}, deletedSnaps: map[string]bool{}, quotaGiB: map[string]int32{}, storageGiB: 64}
+}
+
+func (m *mockAPI) DeleteSnapshot(ctx context.Context, in *awsfsx.DeleteSnapshotInput, _ ...func(*awsfsx.Options)) (*awsfsx.DeleteSnapshotOutput, error) {
+	m.deletedSnaps[*in.SnapshotId] = true
+	return &awsfsx.DeleteSnapshotOutput{SnapshotId: in.SnapshotId, Lifecycle: types.SnapshotLifecycleDeleting}, nil
+}
+
+func (m *mockAPI) UpdateVolume(ctx context.Context, in *awsfsx.UpdateVolumeInput, _ ...func(*awsfsx.Options)) (*awsfsx.UpdateVolumeOutput, error) {
+	if in.OpenZFSConfiguration != nil && in.OpenZFSConfiguration.StorageCapacityQuotaGiB != nil {
+		m.quotaGiB[*in.VolumeId] = *in.OpenZFSConfiguration.StorageCapacityQuotaGiB
+	}
+	v, ok := m.volumes[*in.VolumeId]
+	if !ok {
+		return nil, &types.VolumeNotFound{}
+	}
+	return &awsfsx.UpdateVolumeOutput{Volume: v}, nil
 }
 
 func strp(s string) *string { return &s }
@@ -114,6 +135,9 @@ func (m *mockAPI) CreateSnapshot(ctx context.Context, in *awsfsx.CreateSnapshotI
 
 func (m *mockAPI) DescribeSnapshots(ctx context.Context, in *awsfsx.DescribeSnapshotsInput, _ ...func(*awsfsx.Options)) (*awsfsx.DescribeSnapshotsOutput, error) {
 	if len(in.SnapshotIds) > 0 {
+		if m.deletedSnaps[in.SnapshotIds[0]] {
+			return nil, &types.SnapshotNotFound{}
+		}
 		name := in.SnapshotIds[0][len("fsvolsnap-"):]
 		arn := "arn:aws:fsx:::snapshot/" + name
 		return &awsfsx.DescribeSnapshotsOutput{Snapshots: []types.Snapshot{{
@@ -123,14 +147,26 @@ func (m *mockAPI) DescribeSnapshots(ctx context.Context, in *awsfsx.DescribeSnap
 	}
 	name := "baseline"
 	arn := "arn:aws:fsx:::snapshot/baseline"
-	return &awsfsx.DescribeSnapshotsOutput{Snapshots: []types.Snapshot{{
+	out := &awsfsx.DescribeSnapshotsOutput{Snapshots: []types.Snapshot{{
 		Name: &name, ResourceARN: &arn, Lifecycle: types.SnapshotLifecycleAvailable,
-	}}}, nil
+	}}}
+	for _, n := range m.extraSnaps {
+		id, nn, a := "fsvolsnap-"+n, n, "arn:aws:fsx:::snapshot/"+n
+		if m.deletedSnaps[id] {
+			continue
+		}
+		out.Snapshots = append(out.Snapshots, types.Snapshot{
+			SnapshotId: &id, Name: &nn, ResourceARN: &a, Lifecycle: types.SnapshotLifecycleAvailable,
+		})
+	}
+	return out, nil
 }
 
 func (m *mockAPI) DescribeFileSystems(ctx context.Context, in *awsfsx.DescribeFileSystemsInput, _ ...func(*awsfsx.Options)) (*awsfsx.DescribeFileSystemsOutput, error) {
 	root := "fsvol-root-discovered"
+	cap := m.storageGiB
 	return &awsfsx.DescribeFileSystemsOutput{FileSystems: []types.FileSystem{{
+		StorageCapacity:      &cap,
 		OpenZFSConfiguration: &types.OpenZFSFileSystemConfiguration{RootVolumeId: &root},
 	}}}, nil
 }

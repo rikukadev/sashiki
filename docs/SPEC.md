@@ -409,6 +409,12 @@ type Storage interface {
 |baseline refresh |常に非同期 job             |数秒                     |数分                                 |
 |lazy create      |`TypicalCreate <= 20s`|可                      |不可。PR open トリガー必須                  |
 |host 使い捨て / Spot |`HostIndependent`     |不可                     |可                                  |
+|baseline GC / delete|`DeleteBaselineSnapshot`|`zfs destroy`        |`DeleteSnapshot`(ARN → id を引く。clone 参照中は FSx が拒否)|
+|使用量(private) |`UsedBytes`           |`zfs get used`         |NFS マウントの statfs(未マウントは不明 = `-`)|
+|logical size     |`LogicalSizer`        |`zfs get referenced`   |無し(表示は `-`)                      |
+|quota            |`storage.Quota`       |`refquota`             |`StorageCapacityQuotaGiB`(GiB 切り上げ)|
+|watermark / capacity|`CapacityReporter` |`zpool list`           |`StorageCapacity` − base volume(`<mount_root>/base` に遅延マウント)の statfs avail|
+|baseline promote |`BranchPromoter`      |可                      |不可                                 |
 
 ### 15-4. backend の位置づけ
 
@@ -427,6 +433,8 @@ type Storage interface {
 - NFS export は `no_root_squash`。マウントは `nfsvers=4.1,rsize=1048576,wsize=1048576,hard,noatime`
 - SG: TCP/UDP `111`, `2049`, `20001-20003`
 - `delete-volume` は `DELETE_CHILD_VOLUMES_AND_SNAPSHOTS`
+- sashikid の IAM: `fsx:CreateVolume` / `DeleteVolume` / `DescribeVolumes` / `UpdateVolume`(quota)/ `CreateSnapshot` / `DeleteSnapshot`(baseline GC)/ `DescribeSnapshots` / `DescribeFileSystems`(容量)
+- 容量の観測のため base volume を `<mount_root>/base` に read 用途でマウントする(mysqld は載せない)。base volume の NFS export が要る
 - 最小構成(Single-AZ gen1、64GB、64MB/s)で東京約 6 円/時
 
 -----

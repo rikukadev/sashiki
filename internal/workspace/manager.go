@@ -123,7 +123,7 @@ type Config struct {
 
 	// DefaultStorageQuotaBytes: branch ごとの refquota(#85)。0 = 無制限。
 	// clone 直後に適用し、1 ブランチの暴走が pool を食い尽くすのを防ぐ。
-	// backend が storage.Quota 未実装(fsx)なら適用されない。
+	// backend が storage.Quota 未実装(apfs / reflink)なら適用されない。
 	DefaultStorageQuotaBytes int64
 }
 
