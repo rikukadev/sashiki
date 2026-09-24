@@ -479,8 +479,10 @@ sashiki create pr-run2 > /dev/null || fail "max_running: pr-run2"
 set +e
 out=$(sashiki create pr-run3 2>&1); rc=$?
 set -e
-[ $rc -eq 5 ] || fail "max_running: 3 本目は終了コード 5(limit_reached)のはず (got $rc: $out)"
-grep -q "limit_reached\|max_running" <<<"$out" || fail "max_running: エラーに理由が無い: $out"
+# admission は operation の中で判定されるので、CLI は operation 失敗として 1 を返し、
+# メッセージに limit reached / max_running が出る(同期の 507 → 5 は create 前の判定だけ)。
+[ $rc -eq 1 ] || fail "max_running: 3 本目は operation 失敗(終了コード 1)のはず (got $rc: $out)"
+grep -q "limit reached\|max_running" <<<"$out" || fail "max_running: エラーに理由が無い: $out"
 grep -q pr-run3 <<<"$(sashiki list)" && fail "max_running: 拒否されたブランチが残っている"
 [ "$(mysql -udev@pr-run1 -pdev -h127.0.0.1 -P3306 -N -e 'SELECT 1' 2>/dev/null)" = "1" ] || fail "max_running: 既存ブランチが巻き込まれた"
 # sleeping にすれば枠が空いて 3 本目が通る(running だけを数える)
