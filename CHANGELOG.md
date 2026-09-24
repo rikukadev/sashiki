@@ -7,6 +7,19 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.11.2](https://github.com/rikukadev/sashiki/compare/v0.11.1...v0.11.2) (2026-09-24)
+
+
+### Bug Fixes
+
+* **terraform:** compute置換でstate.dbを保持する ([#329](https://github.com/rikukadev/sashiki/issues/329)) ([4a08dc1](https://github.com/rikukadev/sashiki/commit/4a08dc1892e78fd88beee76c5087ecb0dbcbf9fe))
+* **workspace:** wake で last_conn_at を進め、起動中のブランチを reaper が止めないようにする ([#338](https://github.com/rikukadev/sashiki/issues/338)) ([ce3ac97](https://github.com/rikukadev/sashiki/commit/ce3ac973d8eee52c36cc4a42ca27e10d99c2f80e))
+
+
+### Documentation
+
+* **config:** postgres でも idle_stop_after / delete_after_idle が効くことを config テンプレートに書く ([#337](https://github.com/rikukadev/sashiki/issues/337)) ([8ef4809](https://github.com/rikukadev/sashiki/commit/8ef48091107ff68103b83321f41c8a55f419264e))
+
 ## [0.11.1](https://github.com/rikukadev/sashiki/compare/v0.11.0...v0.11.1) (2026-09-23)
 
 
