@@ -181,6 +181,14 @@ fail() { echo "FSX E2E FAILED: $*" >&2; tail -20 /var/log/sashiki/sashikid.log; 
 time sashiki create pr-1 || fail "create"
 [ "$(q pr-1 'SELECT COUNT(*) FROM app.items')" = "3" ] || fail "pr-1 should have 3 items"
 
+echo "--- 使用量 / 容量 / quota / baseline GC(#278: FSx でも parity)---"
+sashiki show pr-1 --json | python3 -c 'import json,sys; b=json.load(sys.stdin); assert b["used_bytes"] >= 0, b' \
+  || fail "used_bytes should be read from the NFS mount (not -1)"
+sashiki capacity --json | python3 -c 'import json,sys; c=json.load(sys.stdin); assert c["pool_total_bytes"] > 0 and 0 <= c["pool_used_ratio"] < 1, c' \
+  || fail "capacity should report pool usage via the base volume mount"
+mountpoint -q /mnt/sashiki/base || fail "base volume should be mounted at <mount_root>/base for capacity"
+sashiki baseline gc --dry-run > /dev/null || fail "baseline gc --dry-run"
+
 echo "--- 破壊 → reset (作り直し+付け替え) ---"
 q pr-1 "DELETE FROM app.items"
 [ "$(q pr-1 'SELECT COUNT(*) FROM app.items')" = "0" ] || fail "delete should work"

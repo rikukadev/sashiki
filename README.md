@@ -422,7 +422,7 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 | コンテナ(XFS reflink, VM 無し) | ✅ 実機検証済み(sashikid フルコンテナ化。create / reset / delete / lazy create。Docker 互換ランタイム全般。[deploy/orbstack/](deploy/orbstack/)) |
 | PostgreSQL | ✅ MySQL と同等(proxy / lazy create / baseline import / init / refresh / データブラウザ)。Linux(ZFS)と **macOS ネイティブ(APFS, VM 無し)** の両方で実機検証済み |
 | EBS-ZFS バックエンド | ✅ default(Linux)。単一ホスト |
-| FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ)。`baseline promote` 未対応、lazy create 無効(create に 60〜90 秒かかるため)、reset は同じ origin から作り直す(on-create hook を再実行する)。GC / 使用量 / quota / watermark の差は [#278](https://github.com/rikukadev/sashiki/issues/278) |
+| FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ)。機能別: create / reset(同じ origin から作り直し、on-create hook を再実行)/ delete / baseline build・validate・publish・GC / 使用量・quota・watermark(NFS の statfs と `StorageCapacityQuotaGiB`)は対応。**未対応**: `baseline promote`、lazy create(create に 60〜90 秒かかるため無効)、logical size の表示。E2E は [`e2e/fsx/run.sh`](e2e/fsx/run.sh) の手動枠のみ(AWS 資源が要るため定期実行はしない)。詳細は [SPEC 15-3](docs/SPEC.md#15-3-コアの挙動切り替え) |
 | API / config の安定性 | ⚠️ 未固定。v0.x の間はマイナー版で破壊的変更があり得る |
 
 > **プロキシとドライバ**: `:3306` プロキシ(方式A)はクライアントの capability に追従するので、**DEPRECATE_EOF を要求しないドライバ(PHP mysqlnd / Node / PyMySQL 等)でも正しく動く**(v0.4.1 で修正、[#125](https://github.com/rikukadev/sashiki/issues/125))。認証は**クライアント側・backend 側とも `caching_sha2_password` に対応**しており、`mysql_native_password` を廃止した版でも「8.0 を入れ直す」必要はない([#197](https://github.com/rikukadev/sashiki/issues/197) / [#209](https://github.com/rikukadev/sashiki/issues/209))。app_user のプラグインは**backend の版を見て自動で選ぶ**(5.7 は native、8.0 以降は caching_sha2、MariaDB は native。[#211](https://github.com/rikukadev/sashiki/issues/211) / [#219](https://github.com/rikukadev/sashiki/issues/219))。

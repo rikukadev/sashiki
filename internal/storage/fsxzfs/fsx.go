@@ -14,13 +14,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	awsfsx "github.com/aws/aws-sdk-go-v2/service/fsx"
@@ -47,6 +47,8 @@ type API interface {
 	CreateSnapshot(ctx context.Context, in *awsfsx.CreateSnapshotInput, opts ...func(*awsfsx.Options)) (*awsfsx.CreateSnapshotOutput, error)
 	DescribeSnapshots(ctx context.Context, in *awsfsx.DescribeSnapshotsInput, opts ...func(*awsfsx.Options)) (*awsfsx.DescribeSnapshotsOutput, error)
 	DescribeFileSystems(ctx context.Context, in *awsfsx.DescribeFileSystemsInput, opts ...func(*awsfsx.Options)) (*awsfsx.DescribeFileSystemsOutput, error)
+	DeleteSnapshot(ctx context.Context, in *awsfsx.DeleteSnapshotInput, opts ...func(*awsfsx.Options)) (*awsfsx.DeleteSnapshotOutput, error)
+	UpdateVolume(ctx context.Context, in *awsfsx.UpdateVolumeInput, opts ...func(*awsfsx.Options)) (*awsfsx.UpdateVolumeOutput, error)
 }
 
 // Backend は storage.Storage の FSx 実装。
@@ -56,6 +58,11 @@ type Backend struct {
 	// mount/umount 実行(テストで差し替え)
 	mount  func(ctx context.Context, source, target string) error
 	umount func(ctx context.Context, target string) error
+	// statfs / isMount は NFS マウント上の使用量取得(テストで差し替え、#278)
+	statfs  func(path string) (used, avail int64, err error)
+	isMount func(path string) (bool, error)
+
+	baseMu sync.Mutex // baseMount の遅延マウントを直列化
 }
 
 // New は fsx バックエンドを作る。
@@ -69,6 +76,8 @@ func New(cfg Config, api API) *Backend {
 	b := &Backend{cfg: cfg, api: api}
 	b.mount = b.execMount
 	b.umount = b.execUmount
+	b.statfs = statfsUsage
+	b.isMount = isMountPoint
 	return b
 }
 
@@ -396,26 +405,139 @@ func (b *Backend) ListSnapshots(ctx context.Context) ([]storage.SnapshotRef, err
 	return refs, nil
 }
 
-// UsedBytes: FSx の API はボリューム単位の使用量を返さない(CloudWatch のみ)。
-// v1.0 では 0 を返す(既知の制限)。
+// UsedBytes は branch volume の使用量(clone なら CoW 差分)。FSx の API は
+// volume 単位の使用量を返さないが、NFS マウントの statfs は dataset の `used` /
+// `avail` を映すので、マウント先から読む(#278: 以前は常に 0 で実値に見えていた)。
+// マウントされていなければ -1(不明)を返し、表示側は「-」にする。
 func (b *Backend) UsedBytes(ctx context.Context, vol storage.Volume) (int64, error) {
-	return 0, nil
+	if mounted, err := b.isMount(vol.Path); err != nil || !mounted {
+		return -1, nil
+	}
+	used, _, err := b.statfs(vol.Path)
+	if err != nil {
+		return -1, nil
+	}
+	return used, nil
+}
+
+// PoolCapacity は filesystem の容量と使用量(watermark 判定用、#278)。総量は
+// DescribeFileSystems の StorageCapacity(GiB)、空きは base volume を NFS で
+// マウントした statfs の avail(base には quota が無いので pool 全体の空きを映す。
+// branch volume は default_storage_quota で avail が頭打ちになるため使わない)。
+func (b *Backend) PoolCapacity(ctx context.Context) (used, total int64, err error) {
+	out, err := b.api.DescribeFileSystems(ctx, &awsfsx.DescribeFileSystemsInput{
+		FileSystemIds: []string{b.cfg.FileSystemID},
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("describe filesystem: %w", err)
+	}
+	if len(out.FileSystems) == 0 || out.FileSystems[0].StorageCapacity == nil {
+		return 0, 0, fmt.Errorf("storage capacity of %s not found", b.cfg.FileSystemID)
+	}
+	total = int64(*out.FileSystems[0].StorageCapacity) * gib
+	base, err := b.baseMount(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	_, avail, err := b.statfs(base)
+	if err != nil {
+		return 0, 0, fmt.Errorf("statfs %s: %w", base, err)
+	}
+	if avail > total {
+		avail = total
+	}
+	return total - avail, total, nil
+}
+
+const gib = int64(1) << 30
+
+// baseMount は base volume を <MountRoot>/base にマウントしてパスを返す(冪等)。
+// 容量の観測にだけ使い、mysqld は載せない。
+func (b *Backend) baseMount(ctx context.Context) (string, error) {
+	b.baseMu.Lock()
+	defer b.baseMu.Unlock()
+	target := filepath.Join(b.cfg.MountRoot, "base")
+	if mounted, err := b.isMount(target); err == nil && mounted {
+		return target, nil
+	}
+	out, err := b.api.DescribeVolumes(ctx, &awsfsx.DescribeVolumesInput{VolumeIds: []string{b.cfg.BaseVolumeID}})
+	if err != nil {
+		return "", fmt.Errorf("describe base volume: %w", err)
+	}
+	if len(out.Volumes) == 0 || out.Volumes[0].OpenZFSConfiguration == nil ||
+		out.Volumes[0].OpenZFSConfiguration.VolumePath == nil {
+		return "", fmt.Errorf("base volume %s has no volume path", b.cfg.BaseVolumeID)
+	}
+	if err := b.mount(ctx, b.cfg.DNSName+":"+*out.Volumes[0].OpenZFSConfiguration.VolumePath, target); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+// SetQuota は volume の StorageCapacityQuotaGiB(ZFS の quota 相当)を設定する(#278)。
+// FSx の粒度は GiB なので切り上げる。bytes<=0 は -1 で解除。UpdateVolume は
+// administrative action になるので完了を待つ。
+func (b *Backend) SetQuota(ctx context.Context, vol storage.Volume, bytes int64) error {
+	q := int32(-1)
+	if bytes > 0 {
+		q = int32((bytes + gib - 1) / gib)
+	}
+	_, err := b.api.UpdateVolume(ctx, &awsfsx.UpdateVolumeInput{
+		VolumeId:             &vol.Dataset,
+		OpenZFSConfiguration: &types.UpdateOpenZFSVolumeConfiguration{StorageCapacityQuotaGiB: &q},
+	})
+	if err != nil {
+		return fmt.Errorf("fsx update-volume quota: %w", err)
+	}
+	return b.waitVolumeReady(ctx, vol.Dataset)
 }
 
 func strPtr(s string) *string { return &s }
 
-// --- Fix 4: optional interface を明示的に「未対応」として実装する ---
-// 無言スキップ(型アサーション失敗)ではなく、呼び出し側が supported=false を
-// 判定・記録できるようにする(仕様の introspection 規約)。
-
-// ErrUnsupported は fsx-zfs が当該操作を未対応であることを表す。
-var ErrUnsupported = fmt.Errorf("operation not supported by fsx-zfs backend")
-
-// DeleteBaselineSnapshot: fsx では baseline snapshot 削除は AWS API 経由が必要
-// (未実装)。呼び出し側は GC 対象外として扱う。
+// DeleteBaselineSnapshot は base volume 上の snapshot(ARN)を削除する(baseline GC /
+// baseline delete、#278)。DeleteSnapshot は SnapshotId を取るので ARN から引き直し、
+// 消えるまで待つ(clone が参照中なら FSx 側が拒否し、そのエラーを返す)。
 func (b *Backend) DeleteBaselineSnapshot(ctx context.Context, snap storage.SnapshotRef) error {
-	log.Printf("fsx-zfs: DeleteBaselineSnapshot(%s) は未対応。baseline GC はスキップされます", snap)
-	return ErrUnsupported
+	out, err := b.api.DescribeSnapshots(ctx, &awsfsx.DescribeSnapshotsInput{
+		Filters: []types.SnapshotFilter{{
+			Name:   types.SnapshotFilterNameVolumeId,
+			Values: []string{b.cfg.BaseVolumeID},
+		}},
+	})
+	if err != nil {
+		return err
+	}
+	var id string
+	for _, s := range out.Snapshots {
+		if s.ResourceARN != nil && *s.ResourceARN == string(snap) && s.SnapshotId != nil {
+			id = *s.SnapshotId
+			break
+		}
+	}
+	if id == "" {
+		return fmt.Errorf("snapshot %s not found on %s", snap, b.cfg.BaseVolumeID)
+	}
+	if _, err := b.api.DeleteSnapshot(ctx, &awsfsx.DeleteSnapshotInput{SnapshotId: &id}); err != nil {
+		return fmt.Errorf("fsx delete-snapshot: %w", err)
+	}
+	for {
+		ds, err := b.api.DescribeSnapshots(ctx, &awsfsx.DescribeSnapshotsInput{SnapshotIds: []string{id}})
+		if err != nil {
+			var nf *types.SnapshotNotFound
+			if errors.As(err, &nf) {
+				return nil
+			}
+			return err
+		}
+		if len(ds.Snapshots) == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(b.cfg.PollInterval):
+		}
+	}
 }
 
 // ListBranchVolumes: fsx の branch volume 列挙は DescribeVolumes で可能。
