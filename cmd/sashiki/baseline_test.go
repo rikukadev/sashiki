@@ -13,6 +13,8 @@ func TestMajorVersion(t *testing.T) {
 		{"8.0.46", 8, true},
 		{"8.4.11", 8, true},
 		{"9.6.0", 9, true},
+		{"26.7.0", 26, true}, // 9.7 以降の calendar versioning(YY.M.P、#285)
+		{"26.7.1", 26, true},
 		{"5.7.44-log", 5, true},
 		{"5.7.44", 5, true},
 		{"10.11.5-MariaDB", 10, true}, // MariaDB でも major は取れる
@@ -43,6 +45,8 @@ func TestPluginForVersion(t *testing.T) {
 		{"8.3.0", sha2},                           //
 		{"8.4.11", sha2},                          // native 既定 OFF
 		{"9.6.0", sha2},                           // native 廃止
+		{"26.7.0", sha2},                          // calendar versioning(major 26 ≥ 8)
+		{"26.7.1-sashiki", sha2},                  //
 		{"10.11.5-MariaDB", native},               // MariaDB は caching_sha2 非対応
 		{"11.4.2-MariaDB-1:11.4.2+maria", native}, //
 		{"", sha2},                                // 判定不能は既定 caching_sha2

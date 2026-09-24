@@ -84,3 +84,22 @@
 **これにより ADR-006-4 の「proxy_user は mysql_native_password / caching_sha2 は TLS 終端まで保留」は supersede される**。ADR-007 の native 記述(決定 1/3/5)も caching_sha2 に更新される(方式A の骨子=認証終端は不変)。
 
 **関連**: #197(client 側 caching_sha2)、本 PR(backend 側 + app_user)、ADR-006-4 / ADR-007(前提を更新)。
+
+## ADR-009: proxy の合成ハンドシェイクは backend の版を映さず `8.0.0-sashiki-proxy` を名乗る
+
+**背景**: 方式A(ADR-007)では proxy がクライアントへハンドシェイクを返してから認証し、`user@branch` の branch 部を見て初めて接続先が決まる。つまり **ハンドシェイクを送る時点では backend mysqld の版が分からない**(lazy create ならまだ起動すらしていない)。一方 MySQL は 9.7 の次から calendar versioning(`26.7.0` など)になり、「backend の版をそのまま名乗る」案は将来も追従し続ける前提を置くことになる(#285)。
+
+**決定**:
+1. 合成ハンドシェイクの server version は **固定の `8.0.0-sashiki-proxy`** とする。backend の版(8.0 / 8.4 / 26.7)には依存しない。
+2. version 文字列でクライアントに伝えたいのは「**8.0 世代のプロトコル・既定値**(caching_sha2_password を名乗る、utf8mb4、CLIENT_PLUGIN_AUTH 等)で話せる」ことだけで、機能検出はケイパビリティビットで行う。8.0 未満を名乗ると一部ドライバが native 認証・utf8 前提の古い経路に入るため、8.0 以上であることが要件。
+3. backend 固有の版が要る用途(`SELECT @@version`、`sashiki show` の `engine` 情報)は接続後にクエリで取れるので、ハンドシェイクで運ばない。
+4. 版の互換範囲は **backend: MySQL 8.0 / 8.4 / 26.7(実機検証)、5.7 は best-effort、MariaDB 非対応**(ADR-008 と同じ)。**client**: go-sql-driver / Node mysql2 / PyMySQL / mysql CLI で `8.0.0-sashiki-proxy` を見て問題が無いことを確認済み。
+
+**理由**: 認証終端の構造上、ハンドシェイク時点で backend は未定。固定版なら「どの branch に繋いでも同じ挙動」が保てて、クライアントの版依存の挙動差をブランチごとに持ち込まない。`8.0.0` は caching_sha2 / utf8mb4 の既定が揃った最初の版で、以降の版でプロトコルは互換。
+
+**やらないこと**: backend の版をハンドシェイクに反映する(認証後に接続先が決まるため不可能)。合成版を設定で変える(「8.0 以上」以外に意味のある選択肢が無い)。
+
+**Linux `sashiki init` のパッケージ方針**: Ubuntu 24.04 の apt にある `mysql-server-8.0` を入れる(固定)。8.4 LTS / 26.7 を使う場合は MySQL APT リポジトリ等で先に入れてから init する(`/usr/sbin/mysqld` があれば apt ステップは飛ぶ。`--skip-packages` で明示も可)(sashiki 自体は 8.0 / 8.4 / 26.7 で動く。app_user のプラグインは `@@version` から選ぶ)。CI / E2E は 8.0 のみで、他版は macOS ネイティブの実機確認に留まる。
+
+**関連**: #285、ADR-007(方式A)、ADR-008(caching_sha2 統一)。
+

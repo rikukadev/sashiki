@@ -56,7 +56,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 
 | コマンド | 何をするか |
 |---|---|
-| `init` | ホストを構成する。`--pool <p>` / `--device <dev>` / `--engine mysql\|postgres` / `--app-pass <pw>`(省略時: Linux はランダム生成、darwin は `dev`。config が既にあると無視される)/ `--platform darwin`(既定は実行中の OS)/ `--root <dir>`(darwin)/ `--skip-packages` / `--yes`(`-y`) |
+| `init` | ホストを構成する。`--pool <p>` / `--device <dev>` / `--engine mysql\|postgres` / `--app-pass <pw>`(省略時: Linux はランダム生成、darwin は `dev`。config が既にあると無視される)/ `--platform darwin`(既定は実行中の OS)/ `--root <dir>`(darwin)/ `--skip-packages`(apt を触らない。Linux の導入は `mysql-server-8.0` 固定で、mysqld が既にあれば自動で飛ばす。8.4 / 26.7 は先に入れておく)/ `--yes`(`-y`) |
 | `token create --name <n> [--scope branches\|admin]` / `token list` / `token revoke <n>` | API トークン。既定 scope は `branches`。`--config <path>` で config を指定 |
 | `op list` / `op show <id>` / `op wait <id>` | operation(直近 50 件) |
 | `capacity` / `doctor` | 容量とヘルスチェック(読み取りのみ)。`doctor` は問題があると終了コード 1 |
