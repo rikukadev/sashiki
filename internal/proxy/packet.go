@@ -93,8 +93,11 @@ func buildInitialHandshake(connID uint32, sslAvailable bool) ([]byte, []byte, er
 		caps |= capSSL
 	}
 
-	b := []byte{10}                                 // protocol version
-	b = append(b, []byte("8.0.0-sashiki-proxy")...) // server version
+	b := []byte{10} // protocol version
+	// server version は固定(ADR-009)。方式A では user@branch を見るまで接続先が
+	// 決まらないので backend の版は映せない。8.0 世代を名乗ればクライアントは
+	// caching_sha2 / utf8mb4 の既定で話し、以降の版(8.4 / 26.7)ともプロトコル互換。
+	b = append(b, []byte("8.0.0-sashiki-proxy")...)
 	b = append(b, 0)                                // null terminator
 	b = binary.LittleEndian.AppendUint32(b, connID) // thread id
 	b = append(b, salt[:8]...)                      // auth-plugin-data part1

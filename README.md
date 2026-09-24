@@ -81,6 +81,8 @@ sudo sashiki init --pool dbpool --device /dev/nvme1n1   # デバイス名は lsb
 ```
 
 `sashiki init` は構成済みのステップをスキップするので、何度実行しても安全。
+MySQL は Ubuntu の apt にある **8.0** を入れる(`/usr/sbin/mysqld` が既にあれば apt は飛ばす)。8.4 LTS / 26.7 を
+使うなら MySQL APT リポジトリ等で先に入れてから `init` する(sashiki 自体は 8.0 / 8.4 / 26.7 で動く。詳細は [ADR-009](docs/DECISIONS.md))。
 
 ### 3. baseline(元データ)を入れる
 
