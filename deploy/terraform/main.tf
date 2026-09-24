@@ -28,6 +28,8 @@ locals {
   # 指定(#193)が消える(#199)。VERSION は release-please が更新するため
   # `0.5.0 # x-release-please-version` の形。先頭トークンだけ取り出し `v` を前置する。
   sashiki_ref = var.sashiki_ref != "" ? var.sashiki_ref : "v${trimspace(split(" ", file("${path.module}/VERSION"))[0])}"
+  # user-data(新規/置換)と SSM Association(既存環境の移行)で同じ冪等処理を使う。
+  persist_state_script = file("${path.module}/persist-state.sh")
 }
 
 # --- secrets: dev パスワード(Secrets Manager)/ API トークン(SSM SecureString) ---
@@ -206,18 +208,54 @@ resource "aws_instance" "this" {
   }
 
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    data_device        = var.data_device_name
-    data_volume_id     = aws_ebs_volume.data.id
-    pool               = "tank"
-    proxy_user         = var.proxy_user
-    github_token       = var.github_token
-    sashiki_ref        = local.sashiki_ref
-    dev_secret_arn     = aws_secretsmanager_secret.dev_password.arn
-    api_token_ssm_path = aws_ssm_parameter.api_token.name
+    data_device          = var.data_device_name
+    data_volume_id       = aws_ebs_volume.data.id
+    pool                 = "tank"
+    proxy_user           = var.proxy_user
+    github_token         = var.github_token
+    sashiki_ref          = local.sashiki_ref
+    dev_secret_arn       = aws_secretsmanager_secret.dev_password.arn
+    api_token_ssm_path   = aws_ssm_parameter.api_token.name
+    persist_state_script = local.persist_state_script
   })
 
   # user-data と device 名が変わってもデータ EBS は作り直さない。
   lifecycle {
     ignore_changes = [ami]
   }
+}
+
+# user-data は EC2 の起動完了を意味しない。Association を apply の完了条件にして、
+# cloud-init と sashikid の health endpoint が成功するまで待つ。同じスクリプトを
+# 冪等実行するため、既存 module の更新時には root volume 上の state.db もここで
+# データ EBS へ移行される。
+resource "aws_ssm_association" "bootstrap_ready" {
+  name             = "AWS-RunShellScript"
+  association_name = "${var.name}-sashiki-bootstrap-ready"
+
+  targets {
+    key    = "InstanceIds"
+    values = [aws_instance.this.id]
+  }
+
+  parameters = {
+    commands = join("\n", [
+      "set -eu",
+      "cloud-init status --wait",
+      "printf '%s' '${base64encode(local.persist_state_script)}' | base64 --decode > /tmp/sashiki-persist-state",
+      "chmod 0700 /tmp/sashiki-persist-state",
+      "SASHIKI_POOL=tank /tmp/sashiki-persist-state",
+      "for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8080/v1/healthz >/dev/null && exit 0; sleep 5; done",
+      "echo 'sashiki: bootstrap 後も health check が成功しません' >&2",
+      "journalctl -u sashikid --no-pager -n 50 >&2 || true",
+      "exit 1",
+    ])
+  }
+
+  wait_for_success_timeout_seconds = 1800
+
+  depends_on = [
+    aws_volume_attachment.data,
+    aws_iam_role_policy_attachment.ssm,
+  ]
 }

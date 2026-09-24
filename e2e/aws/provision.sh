@@ -44,11 +44,14 @@ log "find the extra volume"
 # 「マウントされていない・パーティションでない・ルートでないブロックデバイス」を探す。
 # ここを固定名で書くと、インスタンス種別を変えた瞬間に落ちる。
 DEVICE=""
-for d in $(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}'); do
-  if [ -z "$(lsblk -no MOUNTPOINT "$d" | tr -d ' \n')" ]; then
-    DEVICE="$d"
-    break
-  fi
+for _ in $(seq 1 60); do
+  for d in $(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}'); do
+    if [ -z "$(lsblk -no MOUNTPOINT "$d" | tr -d ' \n')" ]; then
+      DEVICE="$d"
+      break 2
+    fi
+  done
+  sleep 5
 done
 [ -n "$DEVICE" ] || fail "zpool 用の空きディスクが見つからない: $(lsblk -dpno NAME,SIZE,TYPE | tr '\n' ' ')"
 echo "  device: $DEVICE ($(lsblk -dno SIZE "$DEVICE" | tr -d ' '))"
@@ -60,13 +63,24 @@ log "sashiki init --device $DEVICE"
 sashiki init --yes --pool "$POOL" --device "$DEVICE" --app-pass dev || fail "init が失敗した"
 zpool list "$POOL" > /dev/null || fail "zpool $POOL が作られていない"
 
+log "state.db を data EBS に永続化"
+[ -x /var/tmp/persist-state.sh ] || fail "persist-state.sh が無い"
+SASHIKI_POOL="$POOL" /var/tmp/persist-state.sh || fail "state.db の永続化に失敗した"
+grep -qx 'state_db: /var/lib/sashiki-state/state.db' /etc/sashiki/config.yaml \
+  || fail "config の state_db が永続 dataset を向いていない"
+zfs list "$POOL/sashiki-state" >/dev/null || fail "state dataset が無い"
+
 log "baseline import"
-cat > /var/tmp/sample.sql <<'SQL'
+if ! zfs list "$POOL/base@baseline" >/dev/null 2>&1; then
+  cat > /var/tmp/sample.sql <<'SQL'
 CREATE DATABASE app;
 CREATE TABLE app.items (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64));
 INSERT INTO app.items (name) VALUES ('alpha'), ('beta'), ('gamma');
 SQL
-sashiki baseline import --from /var/tmp/sample.sql || fail "baseline import が失敗した"
+  sashiki baseline import --from /var/tmp/sample.sql || fail "baseline import が失敗した"
+else
+  echo "  existing baseline を再利用"
+fi
 zfs list "$POOL/base@baseline" > /dev/null || fail "baseline スナップショットが無い"
 
 # Terraform の user-data と同じく、API を全 IF で listen させる(#286)。init の
@@ -76,6 +90,10 @@ zfs list "$POOL/base@baseline" > /dev/null || fail "baseline スナップショ�
 log "listen.api を 0.0.0.0 にして token を発行"
 sed -i -E 's/^( *)api: *"127\.0\.0\.1:8080"/\1api: "0.0.0.0:8080"/' /etc/sashiki/config.yaml
 grep -qE '^ *api: *"0\.0\.0\.0:8080"' /etc/sashiki/config.yaml || fail "listen.api を書き換えられない"
+# compute replacement 後の EC2 でも同じ provision が走る。state.db は data EBS の
+# dataset に残っているので同名トークンが既にあり、create は UNIQUE で落ちる。
+# 平文は旧インスタンスと共に消えているので、revoke してから発行し直す。
+sashiki token revoke e2e 2>/dev/null || true
 sashiki token create --name e2e | grep -oE 'sashiki_[0-9a-f]{64}' > /var/tmp/sashiki-e2e-token \
   || fail "token を発行できない"
 chmod 0600 /var/tmp/sashiki-e2e-token

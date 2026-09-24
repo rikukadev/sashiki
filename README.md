@@ -317,7 +317,8 @@ module "db" {
 > `?ref=main` や、別のバイナリ版を使いたいときだけ `sashiki_ref = "vX.Y.Z"` を明示する。
 
 EC2 + EBS(prevent_destroy)+ SG + IAM + Route53 + Secrets/SSM を 1 apply。
-apply 完了時点で sashikid が稼働する。詳細は [deploy/terraform/README.md](deploy/terraform/)。
+SSM が cloud-init と health endpoint を待つため、apply 完了時点で sashikid が応答する。
+詳細は [deploy/terraform/README.md](deploy/terraform/)。
 
 出力 `api_url` は **http**(TLS 終端なし)で、`allowed_sg_ids` の SG からだけ届く。
 VPC 外(GitHub-hosted runner 等)からは Action の `transport: ssm` を使う。
@@ -328,11 +329,14 @@ Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したと�
 > (`terraform apply -replace` など)、データ EBS は `prevent_destroy` で保持される。
 > ※ `ami` は `ignore_changes` なので AMI の更新では作り直されず、`user_data` の変更も既定では
 > in-place(再実行されない)。インスタンスを入れ替えるときは明示的に `-replace` する。
-> state.db は root volume 上にあるので、入れ替え後の台帳の扱いは [#275](https://github.com/rikukadev/sashiki/issues/275) を参照。新しいインスタンスの
-> `sashiki init` は **既存の zpool を検出して `import` し、そのまま再利用する**(pool が無い
-> ときだけ `zpool create`)。ブランチも baseline もそのまま使える。
+> `state.db` も data EBS 上の専用 dataset に置くため、port / origin / operation / token を
+> 含む台帳を引き継ぐ。新しいインスタンスの `sashiki init` は **既存の zpool を検出して
+> `import` し、そのまま再利用する**(pool が無いときだけ `zpool create`)。ブランチも
+> baseline もそのまま使える。
 > ※ import は `-f` 付き(インスタンス差し替えで hostid が変わるため)。EBS は 1 台にしか
 > attach されないので、他ホストと同時にマウントする事故は起きない。
+> v0.11.0 以前から更新する既存環境は、まず**置換なしで apply**して state.db の移行を完了し、
+> その次の apply で置換する。module 更新と `-replace` を同じ plan に入れてはいけない。
 
 モジュールは MySQL 専用(Postgres を選ぶ変数は無い)で、データ EBS の暗号化指定とバックアップ(snapshot)は
 していない。`prevent_destroy` は「消えない」保証で「戻せる」保証ではないので、要るなら AWS Backup 等を別途掛ける。

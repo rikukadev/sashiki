@@ -119,7 +119,18 @@ jobs:
             echo "terminating leftovers: $ids"
             # shellcheck disable=SC2086 # describe-instances は空白区切りで返す
             aws ec2 terminate-instances --instance-ids $ids > /dev/null
+            # shellcheck disable=SC2086 # 同上
+            aws ec2 wait instance-terminated --instance-ids $ids
           fi
+          # compute replacement E2Eのdata EBSは意図的にDeleteOnTermination=false。
+          # run.shのtrapまで到達しない構文エラー等でも、タグから回収する。
+          volumes=$(aws ec2 describe-volumes \
+            --filters "Name=tag:Name,Values=$TAG" "Name=status,Values=available" \
+            --query 'Volumes[].VolumeId' --output text)
+          for volume in $volumes; do
+            echo "deleting leftover volume: $volume"
+            aws ec2 delete-volume --volume-id "$volume" > /dev/null
+          done
 
   # 実 ZFS + mysqld での E2E。GitHub の ubuntu ランナーは sudo と
   # ZFS カーネルモジュールが使えるため、loopback zpool で完結する。

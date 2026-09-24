@@ -3,8 +3,9 @@
 「RDS を選ぶところで sashiki を選べる」ことをゴールにした、1 apply で完結する
 モジュール。EC2 + データ EBS(`prevent_destroy`)+ SG + IAM + Route53 +
 Secrets Manager(dev パスワード)+ SSM(API トークン)を作り、user-data で
-`install.sh` → `sashiki init --yes` まで走らせる。**apply 完了時点で sashikid が
-稼働**している(baseline import はダンプが要るため運用者の次手順)。
+`install.sh` → `sashiki init --yes` まで走らせる。SSM Association が cloud-init と
+health endpoint を待つため、**apply 完了時点で sashikid が応答する**(baseline import は
+ダンプが要るため運用者の次手順)。
 
 ## 使い方
 
@@ -112,8 +113,16 @@ apply 後にサイズが戻ったら通常運用に戻る。
   それだけでは EC2 を置換しない。`terraform apply -replace` 等で置換した場合もデータ EBS は保持される。
   新インスタンスの `sashiki init` は既存 zpool を検出して `zpool import -f` で
   再利用し(pool が無いときだけ `zpool create`)、ブランチと baseline はそのまま
-  使える。`-f` はインスタンス差し替えで hostid が変わるため必要で、EBS は 1 台に
-  しか attach されないので他ホストとの同時マウントは起きない。
+  使える。台帳の `state.db` も data EBS 上の `tank/sashiki-state` に置くため、port /
+  origin / operation / token を含めて引き継がれる。`-f` はインスタンス差し替えで
+  hostid が変わるため必要で、EBS は 1 台にしか attach されないので他ホストとの
+  同時マウントは起きない。
+- **v0.11.0以前から更新する場合は、置換なしのapplyを先に1回行う。** 追加される
+  SSM Association が稼働中EC2の `state.db` を data EBSへ移行し、health checkまで
+  完了する。そのapplyが成功してから `-replace` やinstance class変更を行う。module更新と
+  EC2置換を同じplanに入れると、旧root volumeを破棄する前に台帳を救出できない。
+- Terraform実行主体には通常のEC2/IAM権限に加え、SSM Associationの作成・参照・更新・
+  削除権限が必要。instance role側はmoduleが`AmazonSSMManagedInstanceCore`を付与する。
 - API トークンは SSM SecureString(`api_token_ssm_path`)。dev パスワードは
   Secrets Manager(`password_secret_arn`)。どちらも平文で state に近い形で
   持たない運用にすること(`terraform.tfstate` の暗号化・アクセス制限は前提)。

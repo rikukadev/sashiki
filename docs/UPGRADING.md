@@ -113,9 +113,17 @@ user-data が `listen.api` を `0.0.0.0:8080` に書き換えるようになり�
 新規インスタンスには自動で反映されるが、既存インスタンスでは user-data が再実行されない。
 `/etc/sashiki/config.yaml` の `listen.api` を `0.0.0.0:8080` に変更して sashikid を再起動する。
 
-この変更だけを目的に `terraform apply -replace` でインスタンスを入れ替えてはいけない。
-ブランチデータの EBS は保持される一方、台帳の `state.db` は root volume 上にあり、現状は
-新しいインスタンスへ引き継がれない([#275](https://github.com/rikukadev/sashiki/issues/275))。
+v0.11.0以前から、state.db永続化対応を含む版へ上げるときは次の2 applyに分ける。
+
+1. moduleのrefだけを更新し、**EC2を置換せず**`terraform apply`する。SSM Associationが
+   root volumeの`/var/lib/sashiki/state.db`をdata EBSの`tank/sashiki-state`へ移し、
+   health checkまで待つ。
+2. 1が成功したあとで、必要なら`terraform apply -replace=module.<name>.aws_instance.this`
+   またはinstance classの変更をapplyする。
+
+module更新とEC2置換を同じplanに入れてはいけない。旧root volumeを破棄した後では台帳を
+救出できない。移行後はbranch / baselineに加え、port / origin / operation / tokenを持つ
+`state.db`もdata EBSから新インスタンスへ引き継がれる(#275)。
 
 ### 9. Terraform: `engine_version` 入力を削除(#306)
 
