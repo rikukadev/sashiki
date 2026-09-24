@@ -6,10 +6,10 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/rikukadev/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/oplog"
 	"github.com/rikukadev/sashiki/internal/state"
 	"github.com/rikukadev/sashiki/internal/storage"
 )
@@ -61,7 +61,7 @@ func (m *Manager) reconcile(ctx context.Context, mutate bool) (ReconcileReport, 
 		case state.StateDeleting:
 			// 削除の途中で落ちた → 削除を完了させる(volume 欠損でも Delete が行を掃除する)。
 			if err := m.Delete(ctx, b.Name); err != nil {
-				log.Printf("reconcile: resume delete %s: %v", b.Name, err)
+				oplog.Errorf(oplog.WithBranch(ctx, b.Name), "reconcile: resume delete %s: %v", b.Name, err)
 				rep.Errored = append(rep.Errored, b.Name)
 			} else {
 				rep.Interrupted = append(rep.Interrupted, b.Name)
@@ -131,7 +131,7 @@ func (m *Manager) reconcile(ctx context.Context, mutate bool) (ReconcileReport, 
 		}
 	}
 	if mutate && len(rep.Demoted)+len(rep.Errored)+len(rep.Orphans)+len(rep.Interrupted) > 0 {
-		log.Printf("reconcile: demoted=%v errored=%v orphans=%v interrupted=%v",
+		oplog.Logf(ctx, "reconcile: demoted=%v errored=%v orphans=%v interrupted=%v",
 			rep.Demoted, rep.Errored, rep.Orphans, rep.Interrupted)
 	}
 	return rep, nil

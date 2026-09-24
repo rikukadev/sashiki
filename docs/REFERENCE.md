@@ -73,7 +73,9 @@ config と state.db を直接触る(sashikid 経由ではない)。
 エラーにする。引数の不足・不正(`--for` / `--prefix` の値無し、`--threads` の不正、`export` の `--to` 無し、
 `init --engine` の不正)も 2 で終了する。
 
-`sashikid` は `--config <path>`(`-config` も可)と `--help` だけを取る。
+`sashikid` は `--config <path>`(`-config` も可)と `--help` だけを取る。`log_format: json` のとき、
+operation 内のログには `operation_id` / `operation_type` / `branch` が付く(reaper 等の operation 外は
+`branch` のみ、baseline refresh は `operation_type=baseline-refresh` + `baseline_tag`。SPEC 20-5)。
 
 ## 終了コード
 

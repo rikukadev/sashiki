@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rikukadev/sashiki/internal/oplog"
 	"github.com/rikukadev/sashiki/internal/state"
 )
 
@@ -140,7 +141,8 @@ func (r *Runner) start(typ, target string, fn func(ctx context.Context) error, o
 	go func() {
 		defer r.wg.Done()
 		// operation はリクエストのライフサイクルから切り離す(fsx は数分かかる)。
-		ctx := context.Background()
+		// 途中のログが相関できるよう operation_id / type / branch を ctx に載せる(#284)。
+		ctx := oplog.WithOperation(context.Background(), oplog.Operation{ID: id, Type: typ, Branch: target})
 		var runErr error
 		// 非同期 op 内の panic でデーモンを落とさない(#53/#82)。
 		func() {
@@ -171,7 +173,7 @@ func (r *Runner) RunSync(typ, target string, fn func(ctx context.Context) error)
 		return "", err
 	}
 	start := r.now()
-	runErr := fn(context.Background())
+	runErr := fn(oplog.WithOperation(context.Background(), oplog.Operation{ID: id, Type: typ, Branch: target}))
 	code, errMsg := errInfo(runErr)
 	_ = r.store.FinishOperation(id, code, errMsg)
 	r.logOperation(id, typ, target, start, runErr)

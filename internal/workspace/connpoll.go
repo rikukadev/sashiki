@@ -8,10 +8,10 @@ package workspace
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/rikukadev/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/oplog"
 	"github.com/rikukadev/sashiki/internal/state"
 )
 
@@ -49,7 +49,7 @@ func (m *Manager) RunConnPoller(ctx context.Context, interval time.Duration) {
 func (m *Manager) pollConnsOnce(ctx context.Context, cc engine.ConnCounter) {
 	branches, err := m.db.ListBranches()
 	if err != nil {
-		log.Printf("connpoll: list branches: %v", err)
+		oplog.Errorf(ctx, "connpoll: list branches: %v", err)
 		return
 	}
 	counts := make(map[string]int)
@@ -66,11 +66,11 @@ func (m *Manager) pollConnsOnce(ctx context.Context, cc engine.ConnCounter) {
 			// 一度だけ強く言う(#291)。
 			streak := m.noteConnFail(b.Name)
 			if streak == connFailWarnAt {
-				log.Printf("connpoll: %s: 接続数の取得に %d 回連続で失敗しています。"+
+				oplog.Errorf(oplog.WithBranch(ctx, b.Name), "connpoll: %s: 接続数の取得に %d 回連続で失敗しています。"+
 					"このブランチは idle 停止 / 自動削除の対象になりません(監視の認証・クライアントを確認): %v",
 					b.Name, streak, err)
 			} else {
-				log.Printf("connpoll: %s: %v (使用中として保護)", b.Name, err)
+				oplog.Logf(oplog.WithBranch(ctx, b.Name), "connpoll: %s: %v (使用中として保護)", b.Name, err)
 			}
 			counts[b.Name] = 1
 			continue
@@ -79,7 +79,7 @@ func (m *Manager) pollConnsOnce(ctx context.Context, cc engine.ConnCounter) {
 		counts[b.Name] = n
 		if n > 0 {
 			if terr := m.db.TouchLastConn(b.Name); terr != nil {
-				log.Printf("connpoll: touch %s: %v", b.Name, terr)
+				oplog.Errorf(oplog.WithBranch(ctx, b.Name), "connpoll: touch %s: %v", b.Name, terr)
 			}
 		}
 	}

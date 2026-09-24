@@ -13,6 +13,7 @@ import (
 
 	"github.com/rikukadev/sashiki/internal/engine"
 	"github.com/rikukadev/sashiki/internal/hooks"
+	"github.com/rikukadev/sashiki/internal/oplog"
 	"github.com/rikukadev/sashiki/internal/state"
 	"github.com/rikukadev/sashiki/internal/storage"
 )
@@ -1155,9 +1156,14 @@ func (m *Manager) runHook(ctx context.Context, event hooks.Event, b state.Branch
 	id, _ := m.db.RecordHookStart(b.Name, string(event))
 	res, err := m.hooks.Run(ctx, event, m.hookEnv(b, vol))
 	_ = m.db.RecordHookFinish(id, res.ExitCode)
+	// hook の結果を operation と相関できる形で残す(#284)。branch は ctx に無い
+	// 経路(hooks run API)もあるので明示する。
+	hctx := oplog.WithBranch(ctx, b.Name)
 	if err != nil {
+		oplog.Errorf(hctx, "hook %s failed (exit=%d): %v", event, res.ExitCode, err)
 		return fmt.Errorf("hook %s failed: %w", event, err)
 	}
+	oplog.Logf(hctx, "hook %s ok (exit=%d)", event, res.ExitCode)
 	return nil
 }
 

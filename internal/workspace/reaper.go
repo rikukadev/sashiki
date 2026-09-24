@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rikukadev/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/oplog"
 	"github.com/rikukadev/sashiki/internal/state"
 )
 
@@ -27,7 +28,7 @@ func (m *Manager) RunReaper(ctx context.Context, interval time.Duration) {
 			return
 		case <-t.C:
 			if err := m.Reap(ctx); err != nil {
-				log.Printf("reaper: %v", err)
+				oplog.Errorf(ctx, "reaper: %v", err)
 			}
 		}
 	}
@@ -47,6 +48,7 @@ func (m *Manager) Reap(ctx context.Context) error {
 	}
 	now := time.Now()
 	for _, b := range branches {
+		bctx := oplog.WithBranch(ctx, b.Name) // 途中ログに branch を付ける(#284)
 		reapable := b.State == state.StateRunning || b.State == state.StateSleeping || b.State == state.StateError
 		// lease 失効(expires_at)は絶対期限。idle と違い「使用中でも」回収する
 		// (仕様 13-6: TTL/lease = correctness の担保)。activeConns の判定より先に見る。
@@ -61,14 +63,14 @@ func (m *Manager) Reap(ctx context.Context) error {
 				// promote 元の実体は消せない。running のまま毎 tick Delete を拒否
 				// され続ける代わりに、一度 sleeping へ落として保持する(#289)。
 				if b.State == state.StateRunning {
-					log.Printf("reaper: stopping %s instead of lease deletion (backs baseline %v)", b.Name, backing)
+					oplog.Logf(bctx, "reaper: stopping %s instead of lease deletion (backs baseline %v)", b.Name, backing)
 					if err := m.Sleep(ctx, b.Name); err != nil {
-						log.Printf("reaper: stop protected branch %s: %v", b.Name, err)
+						oplog.Errorf(bctx, "reaper: stop protected branch %s: %v", b.Name, err)
 					}
 				}
 				continue
 			}
-			log.Printf("reaper: deleting %s (lease expired %s ago)", b.Name, now.Sub(*b.ExpiresAt).Round(time.Second))
+			oplog.Logf(bctx, "reaper: deleting %s (lease expired %s ago)", b.Name, now.Sub(*b.ExpiresAt).Round(time.Second))
 			m.reapDelete(ctx, b.Name)
 			continue
 		}
@@ -104,12 +106,12 @@ func (m *Manager) Reap(ctx context.Context) error {
 			if cc, ok := m.eng.(engine.ConnCounter); ok {
 				n, err := m.checkedConnCount(ctx, cc, engine.Instance{Branch: b.Name, Port: b.Port})
 				if err != nil {
-					log.Printf("reaper: connection check %s: %v (使用中として保護)", b.Name, err)
+					oplog.Logf(bctx, "reaper: connection check %s: %v (使用中として保護)", b.Name, err)
 					continue
 				}
 				if n > 0 {
 					if err := m.db.TouchLastConn(b.Name); err != nil {
-						log.Printf("reaper: touch %s: %v", b.Name, err)
+						oplog.Errorf(bctx, "reaper: touch %s: %v", b.Name, err)
 					}
 					continue
 				}
@@ -124,36 +126,36 @@ func (m *Manager) Reap(ctx context.Context) error {
 			}
 			if len(backing) > 0 {
 				if b.State == state.StateRunning {
-					log.Printf("reaper: stopping %s instead of idle deletion (backs baseline %v)", b.Name, backing)
+					oplog.Logf(bctx, "reaper: stopping %s instead of idle deletion (backs baseline %v)", b.Name, backing)
 					if err := m.Sleep(ctx, b.Name); err != nil {
-						log.Printf("reaper: stop protected branch %s: %v", b.Name, err)
+						oplog.Errorf(bctx, "reaper: stop protected branch %s: %v", b.Name, err)
 					}
 				}
 				continue
 			}
-			log.Printf("reaper: deleting %s (idle %s, profile %q)", b.Name, idle.Round(time.Second), b.Profile)
+			oplog.Logf(bctx, "reaper: deleting %s (idle %s, profile %q)", b.Name, idle.Round(time.Second), b.Profile)
 			m.reapDelete(ctx, b.Name)
 			continue
 		}
 		if stopDue {
-			log.Printf("reaper: stopping %s (idle %s, profile %q)", b.Name, idle.Round(time.Second), b.Profile)
+			oplog.Logf(bctx, "reaper: stopping %s (idle %s, profile %q)", b.Name, idle.Round(time.Second), b.Profile)
 			if err := m.Sleep(ctx, b.Name); err != nil {
-				log.Printf("reaper: stop %s: %v", b.Name, err)
+				oplog.Errorf(bctx, "reaper: stop %s: %v", b.Name, err)
 			}
 		}
 	}
 	// 完了/失敗した古い operation を掃除する(operations テーブルの無限成長防止, #83)。
 	if m.cfg.OperationRetention > 0 {
 		if n, err := m.db.PruneOperations(now.Add(-m.cfg.OperationRetention)); err != nil {
-			log.Printf("reaper: prune operations: %v", err)
+			oplog.Errorf(ctx, "reaper: prune operations: %v", err)
 		} else if n > 0 {
-			log.Printf("reaper: pruned %d old operations", n)
+			oplog.Logf(ctx, "reaper: pruned %d old operations", n)
 		}
 		// hook_runs も同じ retention で(create のたびに増える、#295)。
 		if n, err := m.db.PruneHookRuns(now.Add(-m.cfg.OperationRetention)); err != nil {
-			log.Printf("reaper: prune hook runs: %v", err)
+			oplog.Errorf(ctx, "reaper: prune hook runs: %v", err)
 		} else if n > 0 {
-			log.Printf("reaper: pruned %d old hook runs", n)
+			oplog.Logf(ctx, "reaper: pruned %d old hook runs", n)
 		}
 	}
 	return nil
@@ -190,7 +192,7 @@ func (m *Manager) reapError(ctx context.Context, b state.Branch, now time.Time) 
 	if b.ErrorAt == nil {
 		// #298 以前に error になった行。retention はアップグレード時点から数える。
 		if err := m.db.MarkErrorAtIfMissing(b.Name); err != nil {
-			log.Printf("reaper: mark error_at %s: %v", b.Name, err)
+			oplog.Errorf(oplog.WithBranch(ctx, b.Name), "reaper: mark error_at %s: %v", b.Name, err)
 		}
 		return
 	}
@@ -203,7 +205,7 @@ func (m *Manager) reapError(ctx context.Context, b state.Branch, now time.Time) 
 		m.reapLogOnce(b.Name, fmt.Sprintf("reaper: keeping error branch %s (backs baseline %v, err=%v)", b.Name, backing, err))
 		return
 	}
-	log.Printf("reaper: deleting error branch %s (error for %s: %s)", b.Name, age.Round(time.Second), b.ErrorCode)
+	oplog.Logf(oplog.WithBranch(ctx, b.Name), "reaper: deleting error branch %s (error for %s: %s)", b.Name, age.Round(time.Second), b.ErrorCode)
 	m.reapDelete(ctx, b.Name)
 }
 
