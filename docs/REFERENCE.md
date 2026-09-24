@@ -73,6 +73,10 @@ config と state.db を直接触る(sashikid 経由ではない)。
 エラーにする。引数の不足・不正(`--for` / `--prefix` の値無し、`--threads` の不正、`export` の `--to` 無し、
 `init --engine` の不正)も 2 で終了する。
 
+`app_pass` は非 ASCII でもよい。MySQL / PostgreSQL の proxy はどちらも UTF-8 のバイト列で検証し、
+PostgreSQL(SCRAM-SHA-256)は RFC 4013 の SASLprep で正規化してから鍵を導出する(PostgreSQL 本体と同じ。
+正規化に失敗する入力は元の文字列のまま)。
+
 `sashikid` は `--config <path>`(`-config` も可)と `--help` だけを取る。`log_format: json` のとき、
 operation 内のログには `operation_id` / `operation_type` / `branch` が付く(reaper 等の operation 外は
 `branch` のみ、baseline refresh は `operation_type=baseline-refresh` + `baseline_tag`。SPEC 20-5)。

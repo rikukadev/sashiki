@@ -20,8 +20,8 @@ import (
 // サーバ役では接続ごとにランダム salt を作って SaltedPassword を都度計算し、
 // クライアント役(バックエンドへ接続する側)ではサーバから来た salt を使う。
 //
-// 注意: RFC は SASLprep(RFC 4013)によるパスワード正規化を要求するが、
-// ここでは ASCII パスワードを前提に素通しする(非 ASCII は将来対応)。
+// パスワードは RFC 4013 の SASLprep で正規化してから鍵を導出する(saslprep.go、#283)。
+// PostgreSQL と同じく、正規化に失敗した(不正 UTF-8 / 禁止文字)ときは元の文字列を使う。
 
 const scramIterations = 4096
 
@@ -124,7 +124,7 @@ func (s *scramServer) firstReply(data []byte) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	if s.keys, err = deriveScramKeys(s.password, salt, scramIterations); err != nil {
+	if s.keys, err = deriveScramKeys(prepPassword(s.password), salt, scramIterations); err != nil {
 		return "", err
 	}
 	s.serverFirst = fmt.Sprintf("r=%s,s=%s,i=%d",
@@ -228,7 +228,7 @@ func (c *scramClient) final(serverFirst string) (string, error) {
 	if err != nil || iter <= 0 {
 		return "", fmt.Errorf("malformed iteration count")
 	}
-	if c.keys, err = deriveScramKeys(c.password, salt, iter); err != nil {
+	if c.keys, err = deriveScramKeys(prepPassword(c.password), salt, iter); err != nil {
 		return "", err
 	}
 
