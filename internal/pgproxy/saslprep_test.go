@@ -8,7 +8,7 @@ func TestSaslprepExamples(t *testing.T) {
 		in, want string
 		ok       bool
 	}{
-		{"I­X", "IX", true},             // soft hyphen は map-to-nothing
+		{"I\u00adX", "IX", true},             // soft hyphen は map-to-nothing
 		{"user", "user", true},          // 変化なし
 		{"USER", "USER", true},          // 大文字は保存(SASLprep は case-fold しない)
 		{"ª", "a", true},                // ª → a(NFKC)
@@ -44,7 +44,7 @@ func TestSaslprepExamples(t *testing.T) {
 func TestScramRoundTripWithUnicodePassword(t *testing.T) {
 	for _, pair := range [][2]string{
 		{"pässⅨ", "pässIX"},   // 結合文字 + ローマ数字 ↔ 合成済み + ASCII
-		{"I­X", "IX"},          // soft hyphen ↔ 無し
+		{"I\u00adX", "IX"},          // soft hyphen ↔ 無し
 		{" secret", " secret"}, // NBSP ↔ 空白
 	} {
 		cl := &scramClient{password: pair[0]}
