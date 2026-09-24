@@ -90,6 +90,10 @@ zfs list "$POOL/base@baseline" > /dev/null || fail "baseline スナップショ�
 log "listen.api を 0.0.0.0 にして token を発行"
 sed -i -E 's/^( *)api: *"127\.0\.0\.1:8080"/\1api: "0.0.0.0:8080"/' /etc/sashiki/config.yaml
 grep -qE '^ *api: *"0\.0\.0\.0:8080"' /etc/sashiki/config.yaml || fail "listen.api を書き換えられない"
+# compute replacement 後の EC2 でも同じ provision が走る。state.db は data EBS の
+# dataset に残っているので同名トークンが既にあり、create は UNIQUE で落ちる。
+# 平文は旧インスタンスと共に消えているので、revoke してから発行し直す。
+sashiki token revoke e2e 2>/dev/null || true
 sashiki token create --name e2e | grep -oE 'sashiki_[0-9a-f]{64}' > /var/tmp/sashiki-e2e-token \
   || fail "token を発行できない"
 chmod 0600 /var/tmp/sashiki-e2e-token
