@@ -1,0 +1,16 @@
+# /etc/systemd/system/sashiki-baseline-nightly.timer
+# 毎日 03:00(ホストのタイムゾーン)に baseline を更新する(#277)。
+#   sudo systemctl enable --now sashiki-baseline-nightly.timer
+#   systemctl list-timers sashiki-*
+[Unit]
+Description=Run sashiki nightly baseline refresh
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+# 起動が遅れて時刻を過ぎていても 1 回だけ実行する
+Persistent=true
+# 複数ホストで同時に走らないよう少しずらす
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

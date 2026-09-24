@@ -205,7 +205,8 @@ validation の最低項目:
 ```
 main merge
  ├─ migration 変更あり → 即 refresh(schema freshness)
- └─ 通常変更           → nightly refresh(data freshness)
+ └─ 通常変更           → nightly refresh(data freshness)。トリガー(timer / merge)は sashiki の外の責務で、
+                        テンプレートは examples/baseline-refresh/(#277)
 ```
 
 大規模 DB で「merge のたびに全データ再投入」は重いので分ける。migration のみの refresh は「現 baseline から一時 branch を切って migration を当て、それを新 baseline として snapshot」で済ませられる(データ再投入なし)。
@@ -963,7 +964,7 @@ Storage ──────── Workspace / Branch Manager ──────�
 |--------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
 |**v0.1**|ebs-zfs、branch lifecycle(create / reset / recreate / delete / retry)、REST API + operations、SQLite、CLI、hooks、baseline lifecycle(build / validate / publish / set / GC、手動起動)、memory / storage / port admission、reconciliation、doctor|`sashiki init` → `baseline build/validate/publish` → `create pr-1` → 接続 → `reset` → `recreate` → `delete`。max_running 超過で `limit_reached`。sashikid 再起動後に state が一致|
 |**v0.2**|idle stop / wake、TTL / lease、profile、GitHub Action、プレビュー環境連携(port 渡し)                                                                                                                                                             |30 分放置で sleeping、`wake` で復帰。PR open/close で create/delete。7 日で自動削除                                                                                          |
-|**v0.3**|baseline automation(merge / nightly トリガー、mask validation)、Terraform モジュール、observability、sashiki-root-helper、AppArmor プロファイル生成                                                                                                     |`terraform apply` だけで sashikid が動く。夜間 refresh が回る。sudoers が zfs 全体を許可していない                                                                                  |
+|**v0.3**|baseline automation(merge / nightly トリガーは examples/baseline-refresh のテンプレート、mask validation)、Terraform モジュール、observability、sashiki-root-helper、AppArmor プロファイル生成                                                                |`terraform apply` だけで sashikid が動く。夜間 refresh が回る(timer は運用者が置く)。sudoers が zfs 全体を許可していない                                                             |
 |**v0.4**|proxy 方式 A(認証終端)への移行、username routing、認証後 lazy create、Web UI 拡充                                                                                                                                                                   |`mysql -udev@pr-2 -h <host>` で存在しない branch が(認証後に)生えて繋がる                                                                                                    |
 |**v1.x**|fsx-zfs、multi-host、local-zfs profile、Postgres、team quota                                                                                                                                                                            |backend を切り替えてもコアと CLI が変わらない                                                                                                                               |
 

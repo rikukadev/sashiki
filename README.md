@@ -94,6 +94,8 @@ sudo sashiki baseline import --from prod-dump.sql
 baseline は **build → validate → publish** の 3 段階。検証に落ちた候補は current にならないので、
 壊れた migration が入っても新規ブランチは無傷。`baseline set` で直前の正常版に即ロールバックできる。
 本番データを使うなら **PII マスキング**を build に組み込み、`require_masked` を有効にすれば未マスクは publish できない。
+夜間の自動更新(systemd timer)と main への merge を契機にした更新(GitHub Actions → SSM)のテンプレートは
+[examples/baseline-refresh/](examples/baseline-refresh/)(二重起動の 409 / timeout / 失敗通知 / 戻し方まで)。
 
 あるブランチで migration を当てて検証できたら、その状態をそのまま次の baseline に昇格できる(git の branch→main 相当):
 
