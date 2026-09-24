@@ -7,7 +7,7 @@ listen:
 state_db: /var/lib/sashiki/state.db
 run_dir: /run/sashiki          # socket / sentinel を置く実行時領域
 log_dir: /var/log/sashiki      # ログの基点(hooks.log_dir 等は未設定ならここから派生)
-log_format: text   # text | json(構造化ログ。operation ログに operation_id / branch が付く)
+log_format: text   # text | json(構造化ログ。operation 内のログに operation_id / operation_type / branch が付く)
 domain: sashiki.internal
 
 storage:

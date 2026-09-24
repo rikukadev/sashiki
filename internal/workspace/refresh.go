@@ -11,7 +11,6 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/rikukadev/sashiki/internal/baseline"
 	"github.com/rikukadev/sashiki/internal/hooks"
+	"github.com/rikukadev/sashiki/internal/oplog"
 	"github.com/rikukadev/sashiki/internal/state"
 	"github.com/rikukadev/sashiki/internal/storage"
 )
@@ -150,11 +150,14 @@ func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag st
 
 	go func() {
 		defer refreshRunning.Store(false)
+		// refresh は operation_id を持たない(仕様 12-3: 一括実行)ので、途中ログには
+		// operation_type=baseline-refresh と tag を付けて相関する(#284)。
 		cctx, cancel := context.WithTimeout(context.Background(), rc.Timeout)
 		defer cancel()
+		cctx = oplog.WithOperation(cctx, oplog.Operation{Type: "baseline-refresh", Extra: []any{"baseline_tag", tag}})
 		if err := m.runRefresh(cctx, rc, tag); err != nil {
 			refreshLastErr.Store(err.Error())
-			log.Printf("baseline refresh: %v", err)
+			oplog.Errorf(cctx, "baseline refresh: %v", err)
 			return
 		}
 		refreshLastErr.Store("")
@@ -204,7 +207,7 @@ func (m *Manager) buildCandidate(ctx context.Context, rc RefreshConfig, tag stri
 		if err2 := rc.CheckQuiesced(ctx); err2 != nil {
 			return "", false, fmt.Errorf("base is not quiesced after script (snapshot aborted): %w", err2)
 		}
-		log.Printf("baseline build: leftover mysqld was terminated before snapshot")
+		oplog.Logf(ctx, "baseline build: leftover mysqld was terminated before snapshot")
 	}
 	// server_uuid の重複対策(#80 / 仕様 12-3): 正常終了確認後・snapshot 前に auto.cnf 削除。
 	if err := m.removeBaseAutoCnf(ctx); err != nil {
@@ -246,7 +249,7 @@ func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) 
 	if perr != nil {
 		return fmt.Errorf("publish (set current): %w", perr)
 	}
-	log.Printf("baseline refresh: published %s (masked=%v validated=%v)", snap, masked, validated)
+	oplog.Logf(ctx, "baseline refresh: published %s (masked=%v validated=%v)", snap, masked, validated)
 	return nil
 }
 
@@ -408,7 +411,7 @@ func (m *Manager) reclaimBase(ctx context.Context) {
 	}
 	pids := findProcsUsing(path)
 	for _, pid := range pids {
-		log.Printf("baseline refresh: sending SIGTERM to leftover pid %d", pid)
+		oplog.Logf(ctx, "baseline refresh: sending SIGTERM to leftover pid %d", pid)
 		_ = syscall.Kill(pid, syscall.SIGTERM)
 	}
 	deadline := time.Now().Add(30 * time.Second)
@@ -491,7 +494,7 @@ func (m *Manager) runSourceLoader(ctx context.Context, rc RefreshConfig) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("baseline refresh: source loader applied %d file(s): %v", len(applied), applied)
+	oplog.Logf(ctx, "baseline refresh: source loader applied %d file(s): %v", len(applied), applied)
 	return nil
 }
 

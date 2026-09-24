@@ -7,12 +7,12 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"time"
 
+	"github.com/rikukadev/sashiki/internal/oplog"
 	"github.com/rikukadev/sashiki/internal/state"
 	"github.com/rikukadev/sashiki/internal/storage"
 )
@@ -135,7 +135,7 @@ func (m *Manager) PromoteBranch(ctx context.Context, name string, opts PromoteOp
 	if err := m.db.SetCurrentBaseline(string(snap)); err != nil {
 		return "", fmt.Errorf("promote: current baseline 設定に失敗: %w", err)
 	}
-	log.Printf("baseline promote: %s → %s (current, masked=%v validated=%v)", name, snap, prov.Masked, prov.Validated)
+	oplog.Logf(oplog.WithBranch(ctx, name), "baseline promote: %s → %s (current, masked=%v validated=%v)", name, snap, prov.Masked, prov.Validated)
 	return string(snap), nil
 }
 
@@ -220,7 +220,7 @@ func (m *Manager) GCBaselines(ctx context.Context, cfg GCConfig) (GCResult, erro
 		// storage から snapshot を削除(DeleteBaselineSnapshot を持つバックエンドのみ)。
 		if bd, ok := m.st.(baselineDeleter); ok {
 			if err := bd.DeleteBaselineSnapshot(ctx, storage.SnapshotRef(b.Snapshot)); err != nil {
-				log.Printf("baseline gc: delete %s: %v", b.Snapshot, err)
+				oplog.Errorf(ctx, "baseline gc: delete %s: %v", b.Snapshot, err)
 				res.Kept = append(res.Kept, b.Snapshot)
 				continue
 			}

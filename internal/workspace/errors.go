@@ -4,6 +4,7 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/rikukadev/sashiki/internal/hooks"
@@ -61,6 +62,9 @@ func classify(stage string, err error) (code string, recoverable bool, suggestio
 func (m *Manager) failOp(name, op, stage string, err error) error {
 	code, recoverable, suggestions := classify(stage, err)
 	_ = m.db.SetError(name, op, code, recoverable, err.Error(), suggestions)
+	// 失敗ステージを構造化ログに残す(#284)。operation_id は ops の完了ログに付く。
+	slog.Error("operation stage failed", "branch", name, "failed_operation", op, "stage", stage,
+		"error_code", code, "recoverable", recoverable, "error", err.Error())
 	return err
 }
 

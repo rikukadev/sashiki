@@ -664,7 +664,11 @@ daemon 再起動後、state.db / ZFS dataset / mysqld プロセス / systemd uni
 ### 20-5. Observability
 
 - Prometheus(`:9100`): branches by state、running count、memory headroom、pool usage、create/reset 所要時間、hook 失敗数、operation 数
-- 構造化ログ(JSON)に `operation_id` と `branch` を必ず含める
+- 構造化ログ(`log_format: json`)の相関属性(#284):
+  - **operation 内**(create / reset / recreate / retry / delete、`ops.Runner` が起動するもの)のログは `operation_id` / `operation_type` / `branch` を必ず持つ。完了・失敗ログに加え、途中の hook 結果・stage 失敗(`operation stage failed`: `failed_operation` / `stage` / `error_code` / `recoverable`)も同じ属性で相関できる
+  - **operation の外**(reaper / reconcile / connpoll / baseline promote・gc)は該当する `branch` だけを付け、`operation_id` は付けない(空文字を出さない)
+  - **baseline refresh** は operation_id を持たない(12-3 の一括実行)ので `operation_type=baseline-refresh` と `baseline_tag` で相関する
+  - proxy / API の受付ログなど branch を持たないものは属性無し。旧来の `log.Printf` は `msg` だけの JSON になる
 
 -----
 
