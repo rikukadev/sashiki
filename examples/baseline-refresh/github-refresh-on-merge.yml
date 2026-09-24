@@ -1,0 +1,55 @@
+# .github/workflows/sashiki-baseline-on-merge.yml
+# main への merge を契機に sashikid ホストで baseline を build → validate → publish する(#277)。
+# GitHub-hosted runner は VPC 内の API に届かないので、Action の transport=ssm と同じく
+# SSM Run Command でホスト上の nightly-baseline.sh を実行し、完了まで待って結果を中継する。
+#
+# 必要なもの:
+#   - vars.AWS_ROLE_ARN: OIDC で引き受ける IAM ロール(ssm:SendCommand / GetCommandInvocation /
+#     ssm:ListCommandInvocations を対象インスタンスに)
+#   - vars.SASHIKI_INSTANCE_ID: sashikid の EC2(Terraform の output instance_id)
+#   - ホストに examples/baseline-refresh/nightly-baseline.sh を /usr/local/bin に置いてあること
+name: sashiki baseline on merge
+on:
+  push:
+    branches: [main]
+    paths:
+      - "db/migrations/**"   # migration や seed が変わったときだけ回す(全 push なら外す)
+  workflow_dispatch:
+
+# 連続 merge で二重に走らせない。走っている間の push は最後の 1 回だけ待つ。
+concurrency:
+  group: sashiki-baseline
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Run nightly-baseline.sh on the sashikid host
+        env:
+          INSTANCE_ID: ${{ vars.SASHIKI_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          cid=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "sashiki baseline on merge ${GITHUB_SHA::7}" \
+            --timeout-seconds 600 \
+            --parameters 'commands=["sudo -u sashiki /usr/local/bin/nightly-baseline.sh"],executionTimeout=["10800"]' \
+            --query Command.CommandId --output text)
+          echo "command: $cid"
+          # wait command-executed は成功以外(Failed / TimedOut)で非ゼロを返す。結果は出力で見る。
+          aws ssm wait command-executed --command-id "$cid" --instance-id "$INSTANCE_ID" || true
+          aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" \
+            --query '{Status:Status,Out:StandardOutputContent,Err:StandardErrorContent}' --output text
+          status=$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --query Status --output text)
+          [ "$status" = "Success" ] || { echo "baseline refresh failed: $status" >&2; exit 1; }

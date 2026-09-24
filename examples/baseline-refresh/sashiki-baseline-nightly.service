@@ -1,0 +1,20 @@
+# /etc/systemd/system/sashiki-baseline-nightly.service
+# 夜間の baseline 更新(#277)。timer から起動され、nightly-baseline.sh を回す。
+[Unit]
+Description=sashiki nightly baseline build/validate/publish
+After=sashikid.service
+Requires=sashikid.service
+# 失敗時の通知はスクリプト側(SASHIKI_NOTIFY_CMD)か、systemd の OnFailure で。
+# OnFailure=status-email-admin@%n.service
+
+[Service]
+Type=oneshot
+# sashiki CLI は loopback から API を叩くのでトークン不要。root で動かす必要もない
+# (baseline import だけは root 必須だが、build / validate / publish は API)。
+User=sashiki
+Group=sashiki
+Environment=SASHIKI_BUILD_TIMEOUT=2h
+Environment=SASHIKI_VALIDATE_TIMEOUT=30m
+# Environment=SASHIKI_NOTIFY_CMD=curl -sS -X POST -H 'Content-type: application/json' --data-binary @- https://hooks.slack.com/services/XXX
+ExecStart=/usr/local/bin/nightly-baseline.sh
+TimeoutStartSec=3h
