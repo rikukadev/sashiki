@@ -33,6 +33,9 @@ builds:
 archives:
   - id: tarball
     formats: [tar.gz]
+    # sashiki-root-helper は Linux だけに入る(darwin は sudoers を使わない)。
+    # プラットフォームごとにバイナリ数が違っても許す(#276)。
+    allow_different_binary_count: true
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
