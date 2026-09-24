@@ -132,6 +132,7 @@ baseline 内のユーザーのパスワードを両方変える)。macOS ネイ�
 ストレージは **APFS `clonefile`**、mysqld は **systemd を使わず直接 spawn**(process モード)。
 
 ```bash
+brew install --cask rikukadev/tap/sashiki   # Homebrew tap(#270)。tar.gz を手で展開するなら install.sh でも可
 brew install mysql         # 版は問わない(8.0 / 8.4 / 最新のいずれでも可)。app_user の
                            # プラグインは backend の版を見て自動で選ぶので、native を
                            # 廃止した版でも 8.0 を入れ直す必要はない。
