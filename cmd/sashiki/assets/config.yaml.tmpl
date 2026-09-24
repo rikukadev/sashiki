@@ -42,7 +42,7 @@ engine:
     sudo: true
   # postgres を使う場合(listen.proxy は postgres でも使える。dev@<branch> で SCRAM 認証):
   #   - listen.proxy を "0.0.0.0:5432" 等にする(直結するなら "" にして sashiki show <name> のポート)
-  #   - idle_stop_after / delete_after_idle は接続追跡ができないため自動で無効化される
+  #   - idle_stop_after / delete_after_idle は mysql と同じく効く(接続数は pg_stat_activity で数える、#41)
   #   - リモート接続には listen_addresses を広げ、base の pg_hba.conf に host 行が必要
   # postgres:
   #   port_range: [5433, 5632]
