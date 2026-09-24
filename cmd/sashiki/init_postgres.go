@@ -82,11 +82,8 @@ func initStepsPostgres(opts initOpts) []initStep {
 				return runCmd(nil, "zfs", "create", "-o", "recordsize=8k", "-o", "logbias=throughput", opts.pool+"/branches")
 			},
 		},
-		initStep{
-			name: "sudoers: sashiki ユーザーを zfs/systemctl の限定操作に制限",
-			done: func() bool { return fileEqual(sudoersPath, []byte(sudoersContent(opts.pool))) },
-			run:  func() error { return installSudoers(opts.pool) },
-		},
+		rootHelperConfigStep(opts.pool),
+		sudoersStep(opts.pool),
 		initStep{
 			name: "ディレクトリ作成 (/etc/sashiki, /var/lib/sashiki, /var/log/sashiki)",
 			run: func() error {

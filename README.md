@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/rikukadev/sashiki/main/install.sh |
 ### 2. 初期化
 
 ```bash
-# パッケージ導入・AppArmor・sudoers・zpool/データセット・systemd・config 生成まで冪等に
+# パッケージ導入・AppArmor・sudoers(sashiki-root-helper 1 行)・zpool/データセット・systemd・config 生成まで冪等に
 sudo sashiki init --pool dbpool --device /dev/nvme1n1   # デバイス名は lsblk で確認
 ```
 

@@ -267,19 +267,8 @@ func initSteps(opts initOpts) []initStep {
 				return installApparmorProfile(opts.pool)
 			},
 		},
-		initStep{
-			name: "sudoers: sashiki ユーザーを zfs/systemctl の限定操作に制限",
-			done: func() bool {
-				// 内容が最新の生成結果と一致する場合のみスキップ(旧形式の
-				// 緩い sudoers は上書きして絞り直す #78)
-				return fileEqual(sudoersPath, []byte(sudoersContent(opts.pool)))
-			},
-			run: func() error {
-				// /usr/sbin/zfs 全体は広すぎる。実呼び出し形に合わせてパス制限し、
-				// visudo -cf 検証後に本置きする(#78)。将来 root-helper 化する。
-				return installSudoers(opts.pool)
-			},
-		},
+		rootHelperConfigStep(opts.pool),
+		sudoersStep(opts.pool),
 		initStep{
 			name: "ディレクトリ作成 (/etc/sashiki, /var/lib/sashiki, /var/log/sashiki)",
 			run: func() error {
@@ -316,6 +305,72 @@ func initSteps(opts initOpts) []initStep {
 		configPermStep("/etc/sashiki/config.yaml"),
 	)
 	return steps
+}
+
+// useRootHelper は sudoers を helper 1 行にしてよいか。config が無い(これから生成
+// する。テンプレートは root_helper 付き)か、既存 config に root_helper があるとき。
+// 既存 config に無いホストは旧方式のまま(config を書き換えないと sashikid の
+// `sudo -n zfs` が拒否される)。UPGRADING の手順で root_helper を足して init を再実行する。
+func useRootHelper(configPath string) bool {
+	if _, err := os.Stat(configPath); err != nil {
+		return true
+	}
+	return existingRootHelperFromConfig(configPath) != ""
+}
+
+// existingRootHelperFromConfig は既存 config の root_helper(無ければ空)。
+func existingRootHelperFromConfig(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var c struct {
+		RootHelper string `yaml:"root_helper"`
+	}
+	if yaml.Unmarshal(data, &c) != nil {
+		return ""
+	}
+	return c.RootHelper
+}
+
+// rootHelperConfigStep は helper の設定(root 0600)を書く。sudoers より先。
+func rootHelperConfigStep(pool string) initStep {
+	want := []byte(rootHelperConfigContent(pool))
+	return initStep{
+		name: "root-helper 設定 (/etc/sashiki/root-helper.yaml)",
+		done: func() bool { return fileEqual(rootHelperConfigPath, want) },
+		run: func() error {
+			if err := os.MkdirAll("/etc/sashiki", 0o755); err != nil {
+				return err
+			}
+			if !binExists(rootHelperBin) {
+				fmt.Fprintf(os.Stderr, "sashiki init: 警告: %s が見つかりません(deb / tar.gz に同梱。ソースから入れた場合は go build ./cmd/sashiki-root-helper を置く)\n", rootHelperBin)
+			}
+			return os.WriteFile(rootHelperConfigPath, want, 0o600)
+		},
+	}
+}
+
+const rootHelperConfigPath = "/etc/sashiki/root-helper.yaml"
+
+// sudoersStep は sudoers を生成する。root-helper 方式か旧方式かは config で決まる。
+func sudoersStep(pool string) initStep {
+	return initStep{
+		name: "sudoers: sashiki ユーザーの root 操作を sashiki-root-helper に限定",
+		done: func() bool {
+			// 内容が最新の生成結果と一致する場合のみスキップ(旧形式の
+			// 緩い sudoers は上書きして絞り直す #78)
+			return fileEqual(sudoersPath, []byte(sudoersFor(pool, useRootHelper("/etc/sashiki/config.yaml"))))
+		},
+		run: func() error {
+			useHelper := useRootHelper("/etc/sashiki/config.yaml")
+			if !useHelper {
+				fmt.Println("  (既存 config に root_helper が無いため旧方式の sudoers を維持。docs/UPGRADING.md の手順で移行できる)")
+			}
+			// visudo -cf 検証後に本置きする(#78)。
+			return installSudoers(pool, useHelper)
+		},
+	}
 }
 
 // existingPoolFromConfig は既存 config の storage.ebs-zfs.pool(旧名 zfs.pool)を

@@ -649,7 +649,7 @@ daemon 再起動後、state.db / ZFS dataset / mysqld プロセス / systemd uni
 ### 20-3. 権限
 
 - **AppArmor**: PoC の complain モードは製品仕様にしない。`sashiki init` が `/dbpool/branches/**` と `/run/sashiki/**` だけを許可する mysqld プロファイルを生成する
-- **sudoers**: `/usr/sbin/zfs` 全体は広すぎる。v0.1 は `zfs clone|snapshot|rollback|destroy|set|get dbpool/branches/*` にパス制限したラッパースクリプト経由。v0.3 で `sashiki-root-helper`(限定された zfs / mount / systemctl 操作だけを受ける小さな setuid-less デーモン)に閉じ込める
+- **sudoers**: `/usr/sbin/zfs` 全体は広すぎる。sashiki ユーザーに許すのは **`sashiki-root-helper` 1 本だけ**(`sashiki ALL=(root) NOPASSWD: /usr/local/bin/sashiki-root-helper *`)。helper は setuid 無しの通常バイナリで、`sudo -n <helper> zfs|zpool|systemctl ...` の引数を `/etc/sashiki/root-helper.yaml`(root 0600、init が生成)の pool / dataset / unit に対して型付き allowlist で検証し、許可した形以外は実行しない(`internal/roothelper`。clone / snapshot / rollback / destroy / rename / `set refquota=` / get / list、`zpool list|status`、`systemctl start|stop|is-active|kill -s SIGKILL <unit>@<branch>`)。旧方式(sudoers のパターン行)は `*` が空白をまたぐため追加引数を防げず、`root_helper` を持たない既存 config のホストだけに残す(#276 / ADR-010)
 - **`CAP_NET_BIND_SERVICE` は不要**(3306 / 8080 は非特権ポート)
 - sashikid は `sashiki` ユーザーで動く。mysqld は `mysql` ユーザー
 

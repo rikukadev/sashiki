@@ -103,3 +103,16 @@
 
 **関連**: #285、ADR-007(方式A)、ADR-008(caching_sha2 統一)。
 
+## ADR-010: root 操作は sudoers のパターン行ではなく `sashiki-root-helper` に閉じ込める
+
+**背景**: sashikid(User=sashiki)は zfs / zpool / systemctl に root が要る。ADR / #78 では sudoers に `zfs clone <base>@* <branches>/*` のような実呼び出し形のパターン行を並べていたが、sudoers の `*` は空白をまたいでマッチするため `zfs clone <base>@x -o mountpoint=/etc <branches>/y` のような追加引数を防げない。仕様 20-3 は v0.3 で root-helper に閉じ込めるとしていた(#276)。
+
+**決定**:
+1. `cmd/sashiki-root-helper`(setuid 無しの通常バイナリ)を deb / tar.gz に同梱し、sudoers は `sashiki ALL=(root) NOPASSWD: /usr/local/bin/sashiki-root-helper *` の 1 行だけにする。
+2. helper は `/etc/sashiki/root-helper.yaml`(root 0600、`sashiki init` が生成。引数や環境変数で場所を変えられない)の pool / base_dataset / branch_parent / units を読み、argv を型付き allowlist(`internal/roothelper.Validate`、純関数)で検証してから絶対パスの実体(`/usr/sbin/zfs` 等)を固定環境で exec する。許可する形は sashikid が実際に発行する形と 1:1(clone / snapshot / rollback -r / destroy -r・destroy <snap> / rename / set refquota= / get -H [-p] -o value {mountpoint,used,referenced} / list、zpool list -Hp / status -x、systemctl start|stop|is-active|kill -s SIGKILL <unit>@<name>)。
+3. sashikid は config の `root_helper`(init のテンプレートは `/usr/local/bin/sashiki-root-helper`)が設定されていれば `sudo -n <helper> <tool> args...` で呼ぶ。空なら旧方式(`sudo -n zfs ...`)。
+4. 既存ホストの移行: `sashiki init` は既存 config に `root_helper` が無ければ旧方式の sudoers を維持する(config を書き換えないと sashikid が止まるため)。運用者が config に `root_helper:` を足して `sashiki init` を再実行すると helper 1 行に絞られる(docs/UPGRADING.md)。
+
+**理由**: 検証をコード(テスト可能な純関数 + negative test)に置けば、許可外 dataset・追加フラグ・任意 property・任意 unit を確実に拒否できる。デーモン + IPC にしない(sudo が認証・監査ログを持っており、exec 1 回の helper で十分)。
+
+**関連**: #276、#78、仕様 20-3。

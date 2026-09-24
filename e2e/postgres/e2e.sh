@@ -36,6 +36,10 @@ zfs set compression=lz4 atime=off $POOL
 log "install binaries"
 install -m 755 "$SASHIKID_BIN" /usr/local/bin/sashikid-pg
 install -m 755 "$SASHIKI_BIN" /usr/local/bin/sashiki-pg
+# root-helper(#276)。この e2e の config は手書き(root_helper 無し)で sashikid は root
+# 直起動なので使わないが、init が存在を確認するので置いておく。
+HELPER_BIN="$(dirname "$SASHIKID_BIN")/sashiki-root-helper"
+[ -x "$HELPER_BIN" ] && install -m 755 "$HELPER_BIN" /usr/local/bin/sashiki-root-helper
 
 log "sashiki init --engine postgres (#224)"
 # データセット作成・unit 配置・config 生成を init に任せて実機で検証する

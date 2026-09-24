@@ -145,6 +145,7 @@ jobs:
         run: |
           go build -o bin/sashikid ./cmd/sashikid
           go build -o bin/sashiki ./cmd/sashiki
+          go build -o bin/sashiki-root-helper ./cmd/sashiki-root-helper
       - name: Load ZFS kernel module
         run: |
           sudo apt-get update -q
@@ -169,6 +170,7 @@ jobs:
         run: |
           go build -o bin/sashikid ./cmd/sashikid
           go build -o bin/sashiki ./cmd/sashiki
+          go build -o bin/sashiki-root-helper ./cmd/sashiki-root-helper
       - name: Load ZFS kernel module
         run: |
           sudo apt-get update -q

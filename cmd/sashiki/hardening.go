@@ -18,22 +18,40 @@ const (
 	sudoersTmpPath = "/etc/sudoers.d/.sashiki.tmp"
 )
 
-// sudoersContent は /etc/sudoers.d/sashiki の内容を生成する。
-// 実際の呼び出し形(internal/storage/ebszfs/zfs.go、internal/engine/{mysql,postgres})
-// に 1:1 で対応させ、末尾をデータセット/ユニットのパターンで縛る。
+// rootHelperBin は deb / tarball が置く helper のパス。config の root_helper と
+// sudoers の両方がこれを指す。
+const rootHelperBin = "/usr/local/bin/sashiki-root-helper"
+
+// sudoersContent は /etc/sudoers.d/sashiki の内容(root-helper 方式、#276)。
+// sashiki ユーザーに許すのは helper 1 本だけで、zfs / zpool / systemctl の引数は
+// helper が allowlist で検証する(internal/roothelper)。sudoers の `*` は空白を
+// またぐため、旧方式のパターン行では `-o mountpoint=/etc` のような追加引数を
+// 防げなかった。
+func sudoersContent(pool string) string {
+	return strings.Join([]string{
+		"# sashiki: root 操作は sashiki-root-helper だけを許可(sashiki init が生成、#276)。",
+		"# 許可する zfs / zpool / systemctl の形は helper が /etc/sashiki/root-helper.yaml を見て検証する",
+		"# (internal/roothelper)。pool: " + pool,
+		"sashiki ALL=(root) NOPASSWD: " + rootHelperBin + " *",
+	}, "\n") + "\n"
+}
+
+// sudoersLegacyContent は helper を使わない旧方式(config に root_helper が無い
+// 既存ホスト向け)。実際の呼び出し形(internal/storage/ebszfs/zfs.go、
+// internal/engine/{mysql,postgres})に 1:1 で対応させ、末尾をデータセット/ユニットの
+// パターンで縛る。
 //
 // 注意: sudoers の `*` は空白をまたいでマッチする。そのため複数引数やフラグを
 // 取れるコマンドは「末尾がデータセットパターンで終わる」だけでは防げない
 // (例: `zfs clone <base>@x -o mountpoint=/etc <branches>/y` は
 // `clone <base>@* <branches>/*` にマッチしてしまう)。ここでは実呼び出しに
 // 合わせて可能な限り引数個数が固定の形で書き、`zfs set` のような
-// 任意プロパティ変更系は一切許可しない。完全な閉じ込めは root-helper
-// (v0.3、仕様 20-3)で行う。
-func sudoersContent(pool string) string {
+// 任意プロパティ変更系は一切許可しない。完全な閉じ込めは root-helper(sudoersContent)。
+func sudoersLegacyContent(pool string) string {
 	base := pool + "/base"
 	br := pool + "/branches"
 	lines := []string{
-		"# sashiki: 限定的な root 操作のみ許可(sashiki init が生成。root-helper 化は #276)",
+		"# sashiki: 限定的な root 操作のみ許可(sashiki init が生成。旧方式。root-helper は #276)",
 		"# 実呼び出し形は internal/storage/ebszfs/zfs.go / internal/engine/{mysql,postgres} を参照。",
 		"# 注意: sudoers の * は空白をまたぐため、末尾パターンによる制限は完全ではない。",
 		// clone: baseline snapshot → branches 配下のみ(引数 2 個の固定形)。
@@ -64,10 +82,24 @@ func sudoersContent(pool string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
+// sudoersFor は helper を使うかどうかで内容を選ぶ。既存 config に root_helper が
+// 無いホストは旧方式のまま(config を書き換えないと sashikid が動かなくなるため)。
+func sudoersFor(pool string, useHelper bool) string {
+	if useHelper {
+		return sudoersContent(pool)
+	}
+	return sudoersLegacyContent(pool)
+}
+
+// rootHelperConfigContent は helper が読む /etc/sashiki/root-helper.yaml。
+func rootHelperConfigContent(pool string) string {
+	return fmt.Sprintf("# sashiki-root-helper が許可する対象(sashiki init が生成、#276)\npool: %s\nbase_dataset: %s/base\nbranch_parent: %s/branches\nunits: [mysqld, postgres-sashiki]\n", pool, pool, pool)
+}
+
 // installSudoers は sudoers を一時ファイルに書き、visudo -cf で構文検証してから
 // 本置きする。検証に失敗した場合は本体を書き換えずエラーを返す。
-func installSudoers(pool string) error {
-	content := sudoersContent(pool)
+func installSudoers(pool string, useHelper bool) error {
+	content := sudoersFor(pool, useHelper)
 	if err := os.WriteFile(sudoersTmpPath, []byte(content), 0o440); err != nil {
 		return err
 	}

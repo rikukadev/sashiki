@@ -22,6 +22,9 @@ type Config struct {
 	BaselineSnapshot string // baseline (dbpool/base@baseline)
 	ZfsBin           string // 既定 "zfs"。テストで差し替える
 	Sudo             bool   // true なら sudo 経由で実行
+	// RootHelper が設定されていれば `sudo -n <helper> zfs|zpool ...` で実行する(#276)。
+	// Sudo より優先。helper 側が引数を allowlist で検証する。
+	RootHelper string
 }
 
 // Backend は storage.Storage の zfs 実装。
@@ -43,17 +46,25 @@ func New(cfg Config) *Backend {
 }
 
 func (b *Backend) execZfs(ctx context.Context, args ...string) (string, error) {
-	var cmd *exec.Cmd
-	if b.cfg.Sudo {
-		cmd = exec.CommandContext(ctx, "sudo", append([]string{"-n", b.cfg.ZfsBin}, args...)...)
-	} else {
-		cmd = exec.CommandContext(ctx, b.cfg.ZfsBin, args...)
-	}
-	out, err := cmd.CombinedOutput()
+	out, err := b.privCmd(ctx, b.cfg.ZfsBin, "zfs", args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("zfs %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// privCmd は root 操作のコマンドを組む。root-helper があれば
+// `sudo -n <helper> <tool> args...`(helper 側で検証)、無ければ sudo の有無だけ切り替える。
+// tool は helper に渡すコマンド名(zfs / zpool)、bin は直接実行するときのパス。
+func (b *Backend) privCmd(ctx context.Context, bin, tool string, args ...string) *exec.Cmd {
+	switch {
+	case b.cfg.RootHelper != "":
+		return exec.CommandContext(ctx, "sudo", append([]string{"-n", b.cfg.RootHelper, tool}, args...)...)
+	case b.cfg.Sudo:
+		return exec.CommandContext(ctx, "sudo", append([]string{"-n", bin}, args...)...)
+	default:
+		return exec.CommandContext(ctx, bin, args...)
+	}
 }
 
 // Capabilities はローカル zfs の性格: 全操作が速い。
@@ -246,13 +257,7 @@ func (b *Backend) LogicalBytes(ctx context.Context, vol storage.Volume) (int64, 
 // 別バイナリのため専用に実行する。
 func (b *Backend) PoolCapacity(ctx context.Context) (used, total int64, err error) {
 	args := []string{"list", "-Hp", "-o", "alloc,size", b.cfg.Pool}
-	var cmd *exec.Cmd
-	if b.cfg.Sudo {
-		cmd = exec.CommandContext(ctx, "sudo", append([]string{"-n", "zpool"}, args...)...)
-	} else {
-		cmd = exec.CommandContext(ctx, "zpool", args...)
-	}
-	out, err := cmd.CombinedOutput()
+	out, err := b.privCmd(ctx, "zpool", "zpool", args...).CombinedOutput()
 	if err != nil {
 		return 0, 0, fmt.Errorf("zpool list: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -270,13 +275,7 @@ func (b *Backend) PoolCapacity(ctx context.Context) (used, total int64, err erro
 // healthy=true なら detail は "healthy"、false なら zpool の診断出力を detail に入れる。
 func (b *Backend) PoolStatus(ctx context.Context) (healthy bool, detail string, err error) {
 	args := []string{"status", "-x", b.cfg.Pool}
-	var cmd *exec.Cmd
-	if b.cfg.Sudo {
-		cmd = exec.CommandContext(ctx, "sudo", append([]string{"-n", "zpool"}, args...)...)
-	} else {
-		cmd = exec.CommandContext(ctx, "zpool", args...)
-	}
-	out, err := cmd.CombinedOutput()
+	out, err := b.privCmd(ctx, "zpool", "zpool", args...).CombinedOutput()
 	text := strings.TrimSpace(string(out))
 	if err != nil {
 		return false, text, fmt.Errorf("zpool status -x: %w: %s", err, text)

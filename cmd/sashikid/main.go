@@ -118,6 +118,7 @@ func main() {
 			BranchParent:     cfg.Storage.Zfs.BranchParent,
 			BaselineSnapshot: cfg.Storage.Zfs.BaselineSnapshot,
 			Sudo:             cfg.Storage.Zfs.Sudo,
+			RootHelper:       cfg.RootHelper,
 		})
 		st, bp = zbe, zbe
 	}
@@ -137,6 +138,7 @@ func main() {
 			BinDir:          cfg.Engine.Postgres.BinDir,
 			ListenAddresses: cfg.Engine.Postgres.ListenAddresses,
 			Sudo:            cfg.Engine.Postgres.Sudo,
+			RootHelper:      cfg.RootHelper,
 			Mode:            cfg.Engine.Postgres.Mode,
 			RunUser:         cfg.Engine.Postgres.RunUser,
 			SharedBuffers:   cfg.Engine.Postgres.SharedBuffers,
@@ -149,14 +151,15 @@ func main() {
 		// 更新でき、idle_stop_after / delete_after_idle / profile を無効化する必要はない。
 	default:
 		eng = enginemysql.New(enginemysql.Config{
-			EnvDir:    cfg.Engine.Mysql.EnvDir,
-			ProxyUser: cfg.Engine.Mysql.ProxyUser,
-			ProxyPass: cfg.Engine.Mysql.ProxyPass,
-			Sudo:      cfg.Engine.Mysql.Sudo,
-			Mode:      cfg.Engine.Mysql.Mode,
-			MysqldBin: cfg.Engine.Mysql.MysqldBin,
-			RunUser:   cfg.Engine.Mysql.RunUser,
-			ExtraCnf:  cfg.Engine.Mysql.ExtraCnf,
+			EnvDir:     cfg.Engine.Mysql.EnvDir,
+			ProxyUser:  cfg.Engine.Mysql.ProxyUser,
+			ProxyPass:  cfg.Engine.Mysql.ProxyPass,
+			Sudo:       cfg.Engine.Mysql.Sudo,
+			RootHelper: cfg.RootHelper,
+			Mode:       cfg.Engine.Mysql.Mode,
+			MysqldBin:  cfg.Engine.Mysql.MysqldBin,
+			RunUser:    cfg.Engine.Mysql.RunUser,
+			ExtraCnf:   cfg.Engine.Mysql.ExtraCnf,
 			// 見積もり(admission)と実際の mysqld を同じ値にする(#299)。
 			BufferPoolBytes: parseSize(cfg.Engine.Mysql.BufferPoolSize),
 		})

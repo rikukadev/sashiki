@@ -6,6 +6,24 @@
 
 v0.x の間は API / config が固定されていないので、マイナー版で挙動が変わることがある。
 
+## 0.11.x → 0.12.0
+
+### root 操作が `sashiki-root-helper` 経由になる(#276)
+
+sashiki ユーザーの sudoers が「zfs / systemctl のパターン行」から「`/usr/local/bin/sashiki-root-helper` 1 行」に
+変わる(ADR-010)。**新規インスタンス**(deb で入れて `sashiki init`)は自動でこの方式になる。
+
+**既存ホスト**は `sashiki init` を再実行しても旧方式の sudoers が維持される(config に `root_helper` が
+無いため)。移行するには:
+
+1. バイナリを更新する(deb なら `sashiki-root-helper` も `/usr/local/bin` に入る)
+2. `/etc/sashiki/config.yaml` のトップレベルに `root_helper: /usr/local/bin/sashiki-root-helper` を足す
+3. `sudo sashiki init --pool <pool>` を再実行する(sudoers を helper 1 行に絞り、`/etc/sashiki/root-helper.yaml` を書く)
+4. `sudo systemctl restart sashikid` → `sashiki doctor` / `sashiki create` で動作を確認する
+
+2 と 3 の順序を逆にすると、sudoers が先に絞られて旧方式の `sudo -n zfs` が拒否される(sashikid の
+create / delete が全部失敗する)。その場合は config に `root_helper` を足して restart すれば戻る。
+
 ## 0.11.0 → 0.11.x
 
 ### CLI の引数チェックが全コマンドに及ぶ(#325)
