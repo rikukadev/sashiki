@@ -19,10 +19,23 @@ builds:
     goarch: [amd64, arm64]
     ldflags:
       - -s -w -X main.version={{.Version}}+{{.ShortCommit}}
+  # sashiki ユーザーの root 操作を allowlist で閉じ込める helper(#276)。sudoers は
+  # これ 1 行だけを許可する。systemd / ZFS 前提なので Linux のみ。
+  - id: sashiki-root-helper
+    main: ./cmd/sashiki-root-helper
+    binary: sashiki-root-helper
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
 
 archives:
   - id: tarball
     formats: [tar.gz]
+    # sashiki-root-helper は Linux だけに入る(darwin は sudoers を使わない)。
+    # プラットフォームごとにバイナリ数が違っても許す(#276)。
+    allow_different_binary_count: true
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE

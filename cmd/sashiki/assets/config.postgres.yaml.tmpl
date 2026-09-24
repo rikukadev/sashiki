@@ -8,6 +8,10 @@ state_db: /var/lib/sashiki/state.db
 run_dir: /run/sashiki          # socket / sentinel を置く実行時領域
 log_dir: /var/log/sashiki      # ログの基点(hooks.log_dir 等は未設定ならここから派生)
 log_format: text   # text | json(構造化ログ。operation 内のログに operation_id / operation_type / branch が付く)
+# root 操作(zfs / zpool / systemctl)は sashiki-root-helper 経由(#276)。helper が
+# /etc/sashiki/root-helper.yaml の allowlist で引数を検証する。sudoers は helper 1 行だけ。
+# 空にすると旧方式(sudo -n zfs ...、sudoers にパターン行が要る)。
+root_helper: /usr/local/bin/sashiki-root-helper
 domain: sashiki.internal
 
 storage:

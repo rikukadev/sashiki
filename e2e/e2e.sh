@@ -56,6 +56,11 @@ mkdir -p /var/lib/sashiki/branches /var/log/sashiki/hooks /etc/sashiki/hooks
 # --- 2. sashiki init (zpool/データセット/unit/config を作る) ---
 log "sashiki install + init"
 install -m 755 "$SASHIKID_BIN" /usr/local/bin/sashikid
+# root-helper(#276)。init が生成する config は root_helper を指すので、無いと
+# sashikid の zfs / systemctl が全部落ちる。
+HELPER_BIN="$(dirname "$SASHIKID_BIN")/sashiki-root-helper"
+[ -x "$HELPER_BIN" ] || fail "sashiki-root-helper が無い: $HELPER_BIN(go build ./cmd/sashiki-root-helper)"
+install -m 755 "$HELPER_BIN" /usr/local/bin/sashiki-root-helper
 install -m 755 "$SASHIKI_BIN" /usr/local/bin/sashiki
 truncate -s 3G "$POOL_IMG"
 # --app-pass dev: 既定はランダム生成(#297)。以降の mysql -pdev を固定する。
@@ -67,7 +72,18 @@ grep -q "スキップ" <<<"$init2" || fail "init should be idempotent"
 # AppArmor プロファイルと sudoers が生成されていること(詳細な enforce 検証は末尾 #79)
 aa-status | grep -q 'sashiki-mysqld' || fail "apparmor: init should load sashiki-mysqld profile"
 visudo -cf /etc/sudoers.d/sashiki || fail "sudoers: generated file should pass visudo (#78)"
-grep -q "zfs destroy -r $POOL/branches/\*" /etc/sudoers.d/sashiki || fail "sudoers: destroy should be path-restricted (#78)"
+# root-helper 方式(#276): sudoers は helper 1 行だけ。zfs / systemctl の直接許可は無い
+grep -q "NOPASSWD: /usr/local/bin/sashiki-root-helper \*" /etc/sudoers.d/sashiki || fail "sudoers: only the root helper should be allowed (#276)"
+grep -q "/usr/sbin/zfs" /etc/sudoers.d/sashiki && fail "sudoers: zfs must not be allowed directly any more (#276)"
+[ "$(stat -c %a /etc/sashiki/root-helper.yaml)" = "600" ] || fail "root-helper.yaml should be root 0600"
+grep -q "^pool: $POOL$" /etc/sashiki/root-helper.yaml || fail "root-helper.yaml should carry the pool"
+grep -q "^root_helper: /usr/local/bin/sashiki-root-helper$" /etc/sashiki/config.yaml || fail "config should point at the root helper"
+# helper 自体の allowlist: 許可形は通り、pool 本体の destroy や追加フラグは拒否される
+/usr/local/bin/sashiki-root-helper zfs list -H -o name -r "$POOL/branches" > /dev/null || fail "helper: zfs list should be allowed"
+/usr/local/bin/sashiki-root-helper zfs destroy -r "$POOL" 2>/dev/null && fail "helper: destroying the pool must be rejected"
+/usr/local/bin/sashiki-root-helper zfs clone "$POOL/base@baseline" -o mountpoint=/etc "$POOL/branches/evil" 2>/dev/null && fail "helper: extra flags must be rejected"
+/usr/local/bin/sashiki-root-helper systemctl stop sashikid 2>/dev/null && fail "helper: arbitrary units must be rejected"
+zfs list "$POOL/branches/evil" > /dev/null 2>&1 && fail "helper: rejected clone must not have run"
 # E2E 用にポートレンジと上限を絞る
 sed -i 's/port_range: \[3401, 3600\]/port_range: [3401, 3410]/' /etc/sashiki/config.yaml
 sed -i 's/max_branches: 50/max_branches: 5/' /etc/sashiki/config.yaml

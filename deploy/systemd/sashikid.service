@@ -20,4 +20,5 @@ TimeoutStopSec=660
 WantedBy=multi-user.target
 
 # sashiki ユーザーの sudoers は sashiki init が /etc/sudoers.d/sashiki に生成する
-# (実呼び出し形に合わせたパス制限付き。cmd/sashiki/hardening.go 参照 #78)。
+# (/usr/local/bin/sashiki-root-helper 1 行だけ。zfs / systemctl の引数は helper が
+# allowlist で検証する。cmd/sashiki/hardening.go / internal/roothelper 参照 #78 / #276)。

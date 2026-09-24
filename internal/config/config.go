@@ -22,6 +22,10 @@ type Config struct {
 	RunDir    string   `yaml:"run_dir"`    // 実行時の一時領域(socket / sentinel)。既定 /run/sashiki(仕様 21章)
 	LogDir    string   `yaml:"log_dir"`    // ログ出力の基点。既定 /var/log/sashiki(仕様 21章)
 	LogFormat string   `yaml:"log_format"` // text | json(構造化ログ)
+	// RootHelper は sashiki-root-helper のパス(#276)。設定すると zfs / zpool / systemctl の
+	// root 操作を `sudo -n <helper> ...` 経由にし、helper が allowlist で検証する。
+	// 空なら従来どおり `sudo -n zfs ...`(sudoers のパターン行が要る)。
+	RootHelper string `yaml:"root_helper"`
 	Storage   Storage  `yaml:"storage"`
 	Engine    Engine   `yaml:"engine"`
 	Proxy     Proxy    `yaml:"proxy"`

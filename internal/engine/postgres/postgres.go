@@ -34,6 +34,9 @@ type Config struct {
 	ListenAddresses string // 既定 127.0.0.1。リモート接続を許すなら "*" 等
 	ReadyTimeout    time.Duration
 	Sudo            bool
+	// RootHelper は sashiki-root-helper のパス(#276)。設定時は systemctl を
+	// `sudo -n <helper> systemctl ...` で呼ぶ(Sudo より優先)。
+	RootHelper string
 
 	// Mode は起動方式。"systemd"(既定)は systemd テンプレートユニット、
 	// "process" は pg_ctl で直接起動する(systemd の無い macOS ネイティブ /
@@ -95,9 +98,13 @@ func New(cfg Config) *Engine {
 
 func (e *Engine) execCmd(ctx context.Context, name string, args ...string) (string, error) {
 	var cmd *exec.Cmd
-	if e.cfg.Sudo {
+	switch {
+	case e.cfg.RootHelper != "":
+		// root-helper 経由(#276)。name は systemctl で、helper が unit を検証する。
+		cmd = exec.CommandContext(ctx, "sudo", append([]string{"-n", e.cfg.RootHelper, name}, args...)...)
+	case e.cfg.Sudo:
 		cmd = exec.CommandContext(ctx, "sudo", append([]string{"-n", name}, args...)...)
-	} else {
+	default:
 		cmd = exec.CommandContext(ctx, name, args...)
 	}
 	out, err := cmd.CombinedOutput()

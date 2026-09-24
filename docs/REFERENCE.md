@@ -77,6 +77,10 @@ config と state.db を直接触る(sashikid 経由ではない)。
 operation 内のログには `operation_id` / `operation_type` / `branch` が付く(reaper 等の operation 外は
 `branch` のみ、baseline refresh は `operation_type=baseline-refresh` + `baseline_tag`。SPEC 20-5)。
 
+`sashiki-root-helper`(Linux の deb / tar.gz に同梱)は sashikid が `sudo -n` 経由で呼ぶ root 操作の
+allowlist ヘルパーで、手で使うものではない。config の `root_helper` がパスを指し、`sashiki init` が
+`/etc/sudoers.d/sashiki`(helper 1 行)と `/etc/sashiki/root-helper.yaml` を生成する(ADR-010)。
+
 ## 終了コード
 
 | コード | 意味 |
