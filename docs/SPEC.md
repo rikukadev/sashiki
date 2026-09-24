@@ -810,7 +810,7 @@ auth:
 adapter の仕事は「PR #123 → branch `pr-123`」の変換と PR コメント投稿だけ。
 
 ```yaml
-- uses: rikukadev/sashiki/action@v0.11.2 # x-release-please-version
+- uses: rikukadev/sashiki/action@v0.12.0 # x-release-please-version
   with:
     api_url: ${{ vars.SASHIKI_API_URL }}
     token: ${{ secrets.SASHIKI_API_TOKEN }}
