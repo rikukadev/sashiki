@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/rikukadev/sashiki/internal/state"
 	"github.com/rikukadev/sashiki/internal/storage"
@@ -162,4 +163,28 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// Wake は idle の起点(last_conn_at)を進める。running へ遷移してから engine が
+// 上がるまでの間に reaper が「running なのに idle」と判定して止めないため。
+func TestWakeRefreshesIdleClock(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Sleep(ctx, "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := m.db.GetBranch("pr-1"); b.LastConnAt != nil {
+		t.Fatalf("precondition: last_conn_at should be unset, got %v", b.LastConnAt)
+	}
+	before := time.Now()
+	if _, err := m.Wake(ctx, "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := m.db.GetBranch("pr-1")
+	if b.LastConnAt == nil || b.LastConnAt.Before(before.Add(-time.Second)) {
+		t.Errorf("wake should refresh last_conn_at, got %v", b.LastConnAt)
+	}
 }
