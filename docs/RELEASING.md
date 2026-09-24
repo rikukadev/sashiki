@@ -59,6 +59,28 @@ release-please（.github/workflows/release-please.yml）
 
 これだけ。バージョン番号を手で決めたり、タグを打ったり、README を書き換えたりする必要はない。
 
+## Homebrew tap(macOS の入れ口、#270)
+
+goreleaser の `homebrew_casks:` が、リリースごとに `rikukadev/homebrew-tap` の `Casks/sashiki.rb` を
+更新する(手で PR を書かない。`brews:` は goreleaser v2.10 で非推奨)。利用者は:
+
+```bash
+brew install --cask rikukadev/tap/sashiki
+sashiki init --platform darwin --yes      # launchd 常駐まで init が行う(brew services は使わない)
+```
+
+前提(リポジトリ管理者の 1 回きりの作業):
+
+1. `rikukadev/homebrew-tap` を public で作る(空でよい。`Casks/` は goreleaser が作る)
+2. その repo に `contents: write` を持つ fine-grained PAT を作り、sashiki 側の
+   Actions secret `HOMEBREW_TAP_GITHUB_TOKEN` に入れる
+
+secret が無い間は `skip_upload` になり、`dist/homebrew/Casks/sashiki.rb` を生成するだけでリリースは通る
+(`goreleaser release --snapshot --skip=publish` で手元でも確認できる)。cask は darwin の
+tar.gz(amd64 / arm64)を指し、署名 / 公証はしていないので post install で quarantine を外す。`brew services` は使わない: 常駐の LaunchAgent は
+`sashiki init --platform darwin` が config と一緒に生成し、`--root` や `--engine postgres` で
+複数を並べられるため、formula 固定の service 定義とは相性が悪い。
+
 ## 手動フォールバック
 
 release-please を使わず緊急に出す場合（CI 障害時など）:

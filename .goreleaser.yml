@@ -44,6 +44,49 @@ nfpms:
     scripts:
       postinstall: deploy/nfpm/postinstall.sh
 
+# Homebrew tap(#270): rikukadev/homebrew-tap に cask を push する(brews は v2.10 で
+# 非推奨になったので homebrew_casks。tap 経由なら `brew install rikukadev/tap/sashiki` で入る)。
+# tap の repo と HOMEBREW_TAP_GITHUB_TOKEN(contents: write の fine-grained PAT)が無い間は
+# skip_upload になり、dist/homebrew/Casks/ に生成するだけ(リリースは止めない)。
+homebrew_casks:
+  - name: sashiki
+    ids: [tarball]
+    binaries: [sashiki, sashikid]
+    repository:
+      owner: rikukadev
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    commit_author:
+      name: sashiki-release-bot
+      email: noreply@rikuka.dev
+    commit_msg_template: "sashiki {{ .Tag }}"
+    homepage: https://github.com/rikukadev/sashiki
+    description: "Disposable database branches (MySQL / PostgreSQL) on copy-on-write storage"
+    skip_upload: "{{ if index .Env \"HOMEBREW_TAP_GITHUB_TOKEN\" }}false{{ else }}true{{ end }}"
+    # 署名 / 公証はしていないので、Gatekeeper の quarantine を post install で外す
+    # (goreleaser のドキュメントが案内する方法。外さないと「壊れている」と言われて起動できない)。
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sashiki"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sashikid"]
+          end
+    # macOS ネイティブは mysql か postgresql が要るが、どちらかは利用者が選ぶので
+    # dependencies にはしない(caveats で案内)。
+    caveats: |
+      macOS ネイティブ(APFS clonefile、VM 無し)で使うには MySQL か PostgreSQL を入れてから
+      初期化する。launchd への常駐(~/Library/LaunchAgents/dev.sashiki.sashikid.plist)は
+      init が行うので、brew services は使わない:
+
+        brew install mysql            # または postgresql@17
+        sashiki init --platform darwin --yes
+        sashiki create pr-1
+
+      Linux ホストには deb(install.sh)を使う。
+
 checksum:
   name_template: checksums.txt
 
