@@ -7,6 +7,23 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.12.0](https://github.com/rikukadev/sashiki/compare/v0.11.2...v0.12.0) (2026-09-24)
+
+
+### Features
+
+* **fsx:** baseline GC / 使用量 / quota / watermark を FSx バックエンドでも動かす ([#345](https://github.com/rikukadev/sashiki/issues/345)) ([4f04809](https://github.com/rikukadev/sashiki/commit/4f0480907f4fb5bf5680d6e66105e8d47d387921)), closes [#278](https://github.com/rikukadev/sashiki/issues/278)
+* **logs:** operation 途中のログにも operation_id / operation_type / branch を構造化して付ける ([#348](https://github.com/rikukadev/sashiki/issues/348)) ([d1b53df](https://github.com/rikukadev/sashiki/commit/d1b53df2ee7ba36221885f7c9c6d51f134c27316)), closes [#284](https://github.com/rikukadev/sashiki/issues/284)
+* **pgproxy:** SCRAM-SHA-256 のパスワードを SASLprep(RFC 4013)で正規化する ([#350](https://github.com/rikukadev/sashiki/issues/350)) ([390f064](https://github.com/rikukadev/sashiki/commit/390f064bd40889f4f7af54342099f39d654befda))
+* **security:** sashiki-root-helper で root 操作を allowlist に閉じ込め、sudoers を helper 1 行にする ([#346](https://github.com/rikukadev/sashiki/issues/346)) ([23e2ba1](https://github.com/rikukadev/sashiki/commit/23e2ba1517f2dea1a2d5266d32bbddf5c2f5e80c))
+
+
+### Documentation
+
+* **examples:** baseline の nightly / merge トリガー自動更新テンプレートと runbook を追加する ([#349](https://github.com/rikukadev/sashiki/issues/349)) ([2241d18](https://github.com/rikukadev/sashiki/commit/2241d18aa8520ae050aaad54d08c64a5340fbecc)), closes [#277](https://github.com/rikukadev/sashiki/issues/277)
+* **proxy:** 合成ハンドシェイクの版を固定する理由を ADR-009 に書き、26.7 の版判定テストと init のパッケージ方針を足す ([#344](https://github.com/rikukadev/sashiki/issues/344)) ([26496bf](https://github.com/rikukadev/sashiki/commit/26496bf286b07edf18767d5478c48208d142c3bc)), closes [#285](https://github.com/rikukadev/sashiki/issues/285)
+* テスト戦略(SPEC 27)を実態に合わせ、max_running の実 ZFS E2E を足し、v1.x roadmap の未着手項目を整理する ([#351](https://github.com/rikukadev/sashiki/issues/351)) ([ffd8873](https://github.com/rikukadev/sashiki/commit/ffd8873c5107cb933fd905610145f3bd84630235))
+
 ## [0.11.2](https://github.com/rikukadev/sashiki/compare/v0.11.1...v0.11.2) (2026-09-24)
 
 

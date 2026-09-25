@@ -11,7 +11,7 @@ health endpoint を待つため、**apply 完了時点で sashikid が応答す�
 
 ```hcl
 module "db" {
-  source = "github.com/rikukadev/sashiki//deploy/terraform?ref=v0.11.2" # x-release-please-version
+  source = "github.com/rikukadev/sashiki//deploy/terraform?ref=v0.12.0" # x-release-please-version
 
   name           = "myapp-preview"
   vpc_id         = var.vpc_id
@@ -26,7 +26,7 @@ module "db" {
 
   # リポジトリが private のときだけ要る(public なら省略)
   # github_token = var.github_token
-  sashiki_ref  = "v0.11.2" # バイナリとモジュールは同じ ref で固定する x-release-please-version
+  sashiki_ref  = "v0.12.0" # バイナリとモジュールは同じ ref で固定する x-release-please-version
 }
 ```
 
@@ -47,7 +47,7 @@ variable "engine" {
 
 module "sashiki" {
   count             = var.engine == "sashiki" ? 1 : 0
-  source            = "github.com/rikukadev/sashiki//deploy/terraform?ref=v0.11.2" # x-release-please-version
+  source            = "github.com/rikukadev/sashiki//deploy/terraform?ref=v0.12.0" # x-release-please-version
   name              = var.name
   vpc_id            = var.vpc_id
   subnet_ids        = var.subnet_ids
