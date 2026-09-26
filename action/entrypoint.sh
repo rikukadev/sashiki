@@ -24,12 +24,18 @@ set -euo pipefail
 # Action の入力は API / SSM のどちらでもサーバー既定と同じ安全な部分集合に
 # 絞る。特に SSM は対象ホスト上で高権限の shell が動くため、リモートへ送る
 # 前に必ず拒否する(#339)。カスタム name_pattern を使う環境は API を使う。
-if [[ ! "$SASHIKI_BRANCH" =~ ^[a-z0-9-]{1,32}$ ]]; then
-  echo "sashiki: branch '$SASHIKI_BRANCH' is invalid (expected ^[a-z0-9-]{1,32}$)" >&2
+#
+# サーバー既定の ^[a-z0-9-]{1,32}$ より **先頭ハイフンだけ狭い**。argv 転送では
+# 値がそのまま sashiki の引数になるため、`-rf` や `--config` のような値は
+# ブランチ名ではなく **フラグとして読まれる**(`unknown flag -rf`)。
+# シェル注入ではないが、渡した名前が黙って別の意味になるので入口で止める。
+SAFE_NAME='^[a-z0-9][a-z0-9-]{0,31}$'
+if [[ ! "$SASHIKI_BRANCH" =~ $SAFE_NAME ]]; then
+  echo "sashiki: branch '$SASHIKI_BRANCH' is invalid (expected $SAFE_NAME)" >&2
   exit 1
 fi
-if [ -n "${SASHIKI_PROFILE:-}" ] && [[ ! "$SASHIKI_PROFILE" =~ ^[a-z0-9-]{1,32}$ ]]; then
-  echo "sashiki: profile '$SASHIKI_PROFILE' is invalid (expected ^[a-z0-9-]{1,32}$)" >&2
+if [ -n "${SASHIKI_PROFILE:-}" ] && [[ ! "$SASHIKI_PROFILE" =~ $SAFE_NAME ]]; then
+  echo "sashiki: profile '$SASHIKI_PROFILE' is invalid (expected $SAFE_NAME)" >&2
   exit 1
 fi
 

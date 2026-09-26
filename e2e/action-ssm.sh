@@ -94,6 +94,8 @@ bad_inputs=(
   '$(touch /tmp/pwned)'
   '`touch /tmp/pwned`'
   'semi;colon'
+  'pr 1'   # 空白。クォートが外れると 2 引数に割れる
+  '-rf'    # 先頭ハイフン。値ではなくフラグとして読まれる形
 )
 for bad in "${bad_inputs[@]}"; do
   rm -f "$SASHIKI_FAKE_SENT" "$SASHIKI_FAKE_SENT_LOG"
