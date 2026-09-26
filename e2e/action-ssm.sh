@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # transport=ssm の送信経路だけを、偽の aws コマンドで検証する。
 #
-# 実 SSM を叩かずに確かめたいのは 1 点:
-# **インスタンス上で実行されるスクリプトが、送ったものと一文字も違わないこと**。
-# ここが崩れると症状はリモート側の文法エラーになり、原因が遠い。
+# 実 SSM を叩かずに、インスタンスへ届く script と復元される argv を検証する。
+# 公開 input を shell 文字列へ連結すると、SSM Agent の権限で command injection
+# になるため、全操作が同じ安全な argv 転送 helper を通ることもここで固定する。
 #
 # 実際 delete は複数行のスクリプトを送るのに --parameters の shorthand を
 # 使っていて、改行で切られて尻切れで届いていた("Syntax error: end of file
@@ -36,6 +36,9 @@ case "$2" in
         python3 -c 'import json,sys
 doc=json.load(open(sys.argv[1]))
 open(sys.argv[2],"w").write(doc["commands"][0])' "${params#file://}" "$SASHIKI_FAKE_SENT"
+        python3 -c 'import json,sys
+with open(sys.argv[2], "a") as f:
+    f.write(json.dumps(open(sys.argv[1]).read()) + "\n")' "$SASHIKI_FAKE_SENT" "$SASHIKI_FAKE_SENT_LOG"
         ;;
       *)
         # shorthand は改行を含む値を保てない。届いた形をそのまま記録して
@@ -60,24 +63,61 @@ chmod +x "$WORK/bin/aws"
 
 export PATH="$WORK/bin:$PATH"
 export SASHIKI_FAKE_SENT="$WORK/sent"
+export SASHIKI_FAKE_SENT_LOG="$WORK/sent.log"
 export SASHIKI_FAKE_STDOUT="$WORK/stdout"
 export SASHIKI_TRANSPORT=ssm
 export SASHIKI_INSTANCE_ID=i-0123456789abcdef0
 export SASHIKI_BRANCH=pr-2
 
-echo "=== delete: 複数行のスクリプトが欠けずに届く ==="
-# delete は show の結果を読まないので stdout は空でよい
+assert_argv_log() {
+  local expected=$1
+  SASHIKI_EXPECTED="$expected" python3 - "$SASHIKI_FAKE_SENT_LOG" <<'PY'
+import base64, json, os, re, sys
+
+scripts = [json.loads(line) for line in open(sys.argv[1])]
+actual = []
+for script in scripts:
+    match = re.fullmatch(r"SASHIKI_ARGV_B64='([A-Za-z0-9_=-]+)' python3 -c '.+'", script)
+    if not match:
+        raise SystemExit(f"input was interpolated into remote shell script: {script!r}")
+    actual.append(json.loads(base64.urlsafe_b64decode(match.group(1))))
+expected = json.loads(os.environ["SASHIKI_EXPECTED"])
+if actual != expected:
+    raise SystemExit(f"argv mismatch:\nactual={actual!r}\nexpected={expected!r}")
+PY
+}
+
+echo "=== invalid input: shell metacharacter を SSM 送信前に拒否する ==="
+bad_inputs=(
+  "x'; touch /tmp/pwned; #"
+  $'line\nbreak'
+  '$(touch /tmp/pwned)'
+  '`touch /tmp/pwned`'
+  'semi;colon'
+  'pr 1'   # 空白。クォートが外れると 2 引数に割れる
+  '-rf'    # 先頭ハイフン。値ではなくフラグとして読まれる形
+)
+for bad in "${bad_inputs[@]}"; do
+  rm -f "$SASHIKI_FAKE_SENT" "$SASHIKI_FAKE_SENT_LOG"
+  if SASHIKI_BRANCH="$bad" SASHIKI_ACTION=create bash "$ENTRY" >/dev/null 2>&1; then
+    fail "危険な branch が通った: $bad"
+  fi
+  [ ! -e "$SASHIKI_FAKE_SENT" ] || fail "危険な branch が SSM へ送られた: $bad"
+
+  if SASHIKI_PROFILE="$bad" SASHIKI_ACTION=create bash "$ENTRY" >/dev/null 2>&1; then
+    fail "危険な profile が通った: $bad"
+  fi
+  [ ! -e "$SASHIKI_FAKE_SENT" ] || fail "危険な profile が SSM へ送られた: $bad"
+done
+echo "  OK"
+
+echo "=== delete: argv を shell 展開せずに転送する ==="
 : > "$SASHIKI_FAKE_STDOUT"
+: > "$SASHIKI_FAKE_SENT_LOG"
 SASHIKI_ACTION=delete bash "$ENTRY" > /dev/null || fail "delete が失敗した"
-sent=$(cat "$SASHIKI_FAKE_SENT")
-# 届いたものが shell として成立していること。ここが今回の回帰点。
-bash -n <<<"$sent" || fail "届いたスクリプトが shell として壊れている:
-$sent"
-grep -q "sashiki delete 'pr-2'" <<<"$sent" || fail "delete のコマンドが入っていない:
-$sent"
-grep -q "^ *fi$" <<<"$sent" || fail "複数行の末尾(fi)が届いていない:
-$sent"
-echo "  OK($(wc -l <<<"$sent") 行)"
+assert_argv_log '[["delete","pr-2"]]'
+grep -q 'pr-2' "$SASHIKI_FAKE_SENT" && fail "branch が remote shell に平文で連結された"
+echo "  OK"
 
 echo "=== create: show --json の結果を出力に写す ==="
 cat > "$SASHIKI_FAKE_STDOUT" <<'JSON'
@@ -85,12 +125,19 @@ cat > "$SASHIKI_FAKE_STDOUT" <<'JSON'
 JSON
 out="$WORK/gh-output"
 : > "$out"
-SASHIKI_ACTION=create SASHIKI_OUTPUT="$out" bash "$ENTRY" > /dev/null || fail "create が失敗した"
-bash -n <<<"$(cat "$SASHIKI_FAKE_SENT")" || fail "create のスクリプトが shell として壊れている"
+: > "$SASHIKI_FAKE_SENT_LOG"
+SASHIKI_ACTION=create SASHIKI_PROFILE=preview SASHIKI_OUTPUT="$out" bash "$ENTRY" > /dev/null || fail "create が失敗した"
+assert_argv_log '[["create","pr-2","--exist-ok","--profile","preview"],["show","pr-2","--json"]]'
 # 接続情報は proxy 宛の 3 つ組で出ること(#260)
 grep -qx "port=3306" "$out"          || fail "port は proxy のものを出すべき: $(cat "$out")"
 grep -qx "user=dev@pr-2" "$out"      || fail "user が proxy 形式でない: $(cat "$out")"
 grep -qx "host=sashiki.internal" "$out" || fail "host が出ていない: $(cat "$out")"
+echo "  OK"
+
+echo "=== reset: reset と show が同じ argv helper を通る ==="
+: > "$SASHIKI_FAKE_SENT_LOG"
+SASHIKI_ACTION=reset bash "$ENTRY" > /dev/null || fail "reset が失敗した"
+assert_argv_log '[["reset","pr-2"],["show","pr-2","--json"]]'
 echo "  OK"
 
 echo "ACTION SSM E2E PASSED"
