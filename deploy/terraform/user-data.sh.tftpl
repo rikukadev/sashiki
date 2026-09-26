@@ -31,15 +31,11 @@ DEV_PASSWORD="$(aws secretsmanager get-secret-value --region "$REGION" \
 set -x
 
 # --- sashiki のインストール(deb)。sashiki_ref がタグなら releases の直リンクで取得する
-#     (latest API 経由のパース失敗を避ける、#166)。github_token は private 時のみ ---
-%{ if github_token != "" ~}
-curl -fsSL -H "Authorization: Bearer ${github_token}" \
-  "https://raw.githubusercontent.com/rikukadev/sashiki/${sashiki_ref}/install.sh" \
-  | SASHIKI_RELEASE="${sashiki_ref}" GITHUB_TOKEN="${github_token}" bash
-%{ else ~}
+#     (latest API 経由のパース失敗を避ける、#166)。リポジトリは public なので token は
+#     要らない。以前の token 入力(#342)は user-data と cloud-init ログに平文で残るため
+#     削除した(#342)。private で使う場合は AMI に deb を焼くか、S3 経由で配る ---
 curl -fsSL "https://raw.githubusercontent.com/rikukadev/sashiki/${sashiki_ref}/install.sh" \
   | SASHIKI_RELEASE="${sashiki_ref}" bash
-%{ endif ~}
 
 # --- sashiki_ref と実際に入った版が食い違っていないか確認(ref の上げ忘れ検出、#193)---
 %{ if sashiki_ref != "latest" && sashiki_ref != "main" ~}

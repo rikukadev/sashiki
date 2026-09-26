@@ -212,7 +212,6 @@ resource "aws_instance" "this" {
     data_volume_id       = aws_ebs_volume.data.id
     pool                 = "tank"
     proxy_user           = var.proxy_user
-    github_token         = var.github_token
     sashiki_ref          = local.sashiki_ref
     dev_secret_arn       = aws_secretsmanager_secret.dev_password.arn
     api_token_ssm_path   = aws_ssm_parameter.api_token.name

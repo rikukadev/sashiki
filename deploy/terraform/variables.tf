@@ -88,13 +88,6 @@ variable "proxy_user" {
   default     = "dev"
 }
 
-variable "github_token" {
-  description = "install.sh が private リポジトリから deb を取得するための token(public 化後は不要)"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
 variable "sashiki_ref" {
   # 空(既定)なら module 同梱の deploy/terraform/VERSION(= その module ref の
   # タグ)を使う(#199)。つまり利用側は source の ?ref=vX.Y.Z を固定するだけでよく、

@@ -24,8 +24,6 @@ module "db" {
   route53_zone_id = var.internal_zone_id
   dns_name        = "db.internal.example.com"
 
-  # リポジトリが private のときだけ要る(public なら省略)
-  # github_token = var.github_token
   sashiki_ref  = "v0.12.0" # バイナリとモジュールは同じ ref で固定する x-release-please-version
 }
 ```
