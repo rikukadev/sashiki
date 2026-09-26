@@ -195,6 +195,8 @@ func main() {
 		MysqlExtraCnf:      cfg.Engine.Mysql.ExtraCnf,
 		PgBinDir:           cfg.Engine.Postgres.BinDir,
 		PgRunUser:          cfg.Engine.Postgres.RunUser,
+		AppUser:            cfg.AppUser(),
+		AppPass:            cfg.AppPass(),
 		StateDir:           "/var/lib/sashiki/branches",
 		LazyCreate:         cfg.Branches.LazyCreate,
 		LazyMaxWait:        cfg.Branches.LazyCreateMaxWait,

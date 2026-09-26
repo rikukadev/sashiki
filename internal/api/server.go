@@ -289,7 +289,10 @@ func (s *Server) handleBaseline(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBaselineRefresh(w http.ResponseWriter, r *http.Request) {
-	tag, err := s.mgr.RefreshBaseline(r.Context(), workspace.RefreshConfig{})
+	// ?app_user_only=true: マイグレーションは当てず app ユーザーの同期だけ(#355)。
+	tag, err := s.mgr.RefreshBaseline(r.Context(), workspace.RefreshConfig{
+		AppUserOnly: r.URL.Query().Get("app_user_only") == "true",
+	})
 	if errors.Is(err, workspace.ErrRefreshRunning) {
 		// 仕様 17章のコード名に統一(旧 refresh_running)
 		writeErr(w, http.StatusConflict, "operation_in_progress", err.Error())
