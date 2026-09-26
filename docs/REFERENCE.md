@@ -200,10 +200,11 @@ close で delete(既に無ければ成功扱い)、それ以外のイベント�
 | `key_name` | `""` | SSH 鍵(SSM があれば不要) |
 | `proxy_user` | `dev` | アプリ用ユーザー名 |
 | `sashiki_ref` | モジュール同梱の `VERSION` | install.sh の取得元 |
+| `admin_token` | `false` | 運用者向け admin トークン(`SASHIKI_API_TOKEN`)を発行して `admin_token_ssm_path` に置く。既定は `branches` scope の state.db トークンだけ(#340) |
 | `tags` | `{}` | 追加タグ |
 
 出力は `endpoint` / `reader_endpoint`(同値)/ `port` / `username` / `branch_user` /
-`password_secret_arn` / `api_url` / `api_token_ssm_path` / `security_group_id` / `instance_id`。
+`password_secret_arn` / `api_url` / `api_token_ssm_path`(branches scope)/ `admin_token_ssm_path`(`admin_token = true` のときだけ)/ `security_group_id` / `instance_id`。
 
 ## config
 

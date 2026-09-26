@@ -25,6 +25,25 @@ v0.x の間は API / config が固定されていないので、マイナー版�
      同じ device 名で attach → `sudo zpool import -f tank` → `sudo systemctl start sashikid`
   6. 動作確認後に旧 volume を削除する
 
+### Terraform: `api_token_ssm_path` が revoke 可能な `branches` トークンになる(#340)
+
+これまで `api_token_ssm_path` の値は環境変数 `SASHIKI_API_TOKEN` に渡す **admin** トークン
+(revoke 不能)だった。0.12.x からは bootstrap でインスタンスが `sashiki token create --name ci
+--scope branches` で発行した state.db トークンを置き、Terraform は値を管理しない。
+
+- **新規インスタンス / 置換後**: 自動でこの形になる。CI(GitHub Action、`transport: api`)は
+  そのまま動くが、admin 操作(`baseline publish` / `drain` / `gc` / データブラウザ)はこの
+  トークンでは 403 になる。ホスト上の loopback から行う(`aws ssm start-session --target <instance_id>`
+  → `sashiki ...`)。リモートから admin が要るなら `admin_token = true`
+- **既存インスタンス**(置換しない場合): `api_token_ssm_path` の値は `ignore_changes` なので旧 admin
+  トークンのまま動き続ける(無停止)。絞るなら、ホスト上で
+  `sudo sashiki token create --name ci --scope branches` の平文を
+  `aws ssm put-parameter --name <api_token_ssm_path> --type SecureString --value ... --overwrite` で入れ替え、
+  `/etc/sashiki/sashikid.env` を空にして `sudo systemctl restart sashikid`(admin_token = false なら
+  次の置換で自動的にこの状態になる)
+- 呼び出し側で `random_password.api_token` を参照していた場合は `admin_token = true` +
+  `admin_token_ssm_path` に置き換える
+
 ### Terraform: `github_token` 入力を削除(#342)
 
 private リポジトリ向けの `github_token` は user-data(EC2 属性)と cloud-init ログに平文で残るため削除した。

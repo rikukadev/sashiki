@@ -43,6 +43,39 @@ run "defaults" {
     condition     = !strcontains(aws_instance.this.user_data, "github_token") && !strcontains(aws_instance.this.user_data, "GITHUB_TOKEN")
     error_message = "user-data に github_token 経路が残っている(#342)"
   }
+
+  # #340: CI 用トークンは branches scope で state.db に発行し、Terraform は値を持たない。
+  # admin トークンは既定で発行しない。
+  assert {
+    condition     = strcontains(aws_instance.this.user_data, "sashiki token create --name ci --scope branches")
+    error_message = "user-data が branches scope のトークンを発行していない(#340)"
+  }
+  assert {
+    condition     = aws_ssm_parameter.api_token.value == "pending-bootstrap"
+    error_message = "api_token パラメータの値を Terraform が管理してしまっている(#340)"
+  }
+  assert {
+    condition     = !strcontains(aws_instance.this.user_data, "admin-token") && output.admin_token_ssm_path == null && length(aws_ssm_parameter.admin_token) == 0
+    error_message = "admin トークンが既定で発行されている(#340)"
+  }
+}
+
+# admin トークンは opt-in。
+run "admin_token_opt_in" {
+  command = apply
+
+  variables {
+    admin_token = true
+  }
+
+  assert {
+    condition     = length(aws_ssm_parameter.admin_token) == 1 && output.admin_token_ssm_path == "/t/sashiki/admin-token"
+    error_message = "admin_token = true で admin トークンの置き場が作られない"
+  }
+  assert {
+    condition     = strcontains(aws_instance.this.user_data, "/t/sashiki/admin-token") && !strcontains(aws_instance.this.user_data, random_password.admin_token[0].result)
+    error_message = "admin トークンは実行時に SSM から取るべきで、user-data に平文を埋めない"
+  }
 }
 
 # 既存の非暗号化 volume を持つ環境向けの opt-out(移行までの間だけ)。

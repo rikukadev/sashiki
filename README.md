@@ -214,7 +214,7 @@ API(= sashikid)への認証は「**ローカルは素通し、外から叩くと
 | `branches`(`token create` の既定) | ブランチの create / reset / recreate / delete / retry / lease / sleep / wake、一覧・詳細・operation・capacity の読み取り | CI / GitHub Action に配る |
 | `admin` | 上に加え、baseline の build / validate / publish / set / promote / delete / gc、`drain`、`gc --orphans`、**データブラウザ(任意 SQL)**、hook の手動実行 | 運用者 |
 
-loopback からの無認証アクセスと、`SASHIKI_API_TOKEN` 環境変数で渡すトークン(Terraform 生成)は `admin`。
+loopback からの無認証アクセスと、`SASHIKI_API_TOKEN` 環境変数で渡すトークンは `admin`(Terraform は既定で発行しない。`api_token_ssm_path` は `branches` の state.db トークン、#340)。
 CI に配るのは `branches` にしておくと、GitHub Secrets が漏れても baseline の差し替えや
 任意 SQL(app_user は MySQL `GRANT ALL` / Postgres `SUPERUSER` なので OS コマンド実行に等しい)までは届かない。
 データブラウザと hook 手動実行は「誰が何を流したか」を sashikid のログに残す。

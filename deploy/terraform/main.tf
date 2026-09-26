@@ -39,7 +39,9 @@ resource "random_password" "dev" {
   special = false
 }
 
-resource "random_password" "api_token" {
+# admin トークンは opt-in(#340)。既定では発行しない。
+resource "random_password" "admin_token" {
+  count   = var.admin_token ? 1 : 0
   length  = 40
   special = false
 }
@@ -54,10 +56,28 @@ resource "aws_secretsmanager_secret_version" "dev_password" {
   secret_string = random_password.dev.result
 }
 
+# CI / Action に配る API トークン(#340)。値は user-data が `sashiki token create --scope branches`
+# で state.db に発行した平文を put-parameter で入れる(list / revoke / rotate できる。
+# state.db は data EBS に永続化されるので compute replacement でも失わない)。Terraform は
+# 置き場所だけを作り、値は管理しない(ignore_changes)。
 resource "aws_ssm_parameter" "api_token" {
-  name  = "/${var.name}/sashiki/api-token"
+  name        = "/${var.name}/sashiki/api-token"
+  description = "sashiki API token (branches scope, issued by the instance at bootstrap)"
+  type        = "SecureString"
+  value       = "pending-bootstrap"
+  tags        = local.tags
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+# 運用者向けの admin トークン(opt-in)。SASHIKI_API_TOKEN として sashikid の環境に渡す。
+resource "aws_ssm_parameter" "admin_token" {
+  count = var.admin_token ? 1 : 0
+  name  = "/${var.name}/sashiki/admin-token"
   type  = "SecureString"
-  value = random_password.api_token.result
+  value = random_password.admin_token[0].result
   tags  = local.tags
 }
 
@@ -118,10 +138,19 @@ data "aws_iam_policy_document" "secrets" {
     actions   = ["secretsmanager:GetSecretValue"]
     resources = [aws_secretsmanager_secret.dev_password.arn]
   }
+  # bootstrap で発行した branches トークンを置く(読む必要はない)。
   statement {
-    sid       = "ReadApiToken"
-    actions   = ["ssm:GetParameter"]
+    sid       = "WriteApiToken"
+    actions   = ["ssm:PutParameter"]
     resources = [aws_ssm_parameter.api_token.arn]
+  }
+  dynamic "statement" {
+    for_each = var.admin_token ? [1] : []
+    content {
+      sid       = "ReadAdminToken"
+      actions   = ["ssm:GetParameter"]
+      resources = [aws_ssm_parameter.admin_token[0].arn]
+    }
   }
 }
 
@@ -221,6 +250,7 @@ resource "aws_instance" "this" {
     sashiki_ref          = local.sashiki_ref
     dev_secret_arn       = aws_secretsmanager_secret.dev_password.arn
     api_token_ssm_path   = aws_ssm_parameter.api_token.name
+    admin_token_ssm_path = var.admin_token ? aws_ssm_parameter.admin_token[0].name : ""
     persist_state_script = local.persist_state_script
   })
 

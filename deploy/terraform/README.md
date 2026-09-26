@@ -121,8 +121,15 @@ apply 後にサイズが戻ったら通常運用に戻る。
   EC2置換を同じplanに入れると、旧root volumeを破棄する前に台帳を救出できない。
 - Terraform実行主体には通常のEC2/IAM権限に加え、SSM Associationの作成・参照・更新・
   削除権限が必要。instance role側はmoduleが`AmazonSSMManagedInstanceCore`を付与する。
-- API トークンは SSM SecureString(`api_token_ssm_path`)。dev パスワードは
-  Secrets Manager(`password_secret_arn`)。どちらも平文で state に近い形で
+- API トークン(`api_token_ssm_path`)は **`branches` scope の state.db トークン**(#340)。
+  bootstrap でインスタンスが `sashiki token create --name ci --scope branches` で発行し、平文を
+  SSM SecureString に置く。Terraform state には値が入らない(`ignore_changes`)。ローテーションは
+  ホスト上で `sashiki token revoke ci` → `token create --name ci --scope branches` → put-parameter
+  (置換時は user-data が自動で行う)。admin 操作(baseline publish / promote、drain、gc、データ
+  ブラウザ)はホスト上の loopback から行う(`aws ssm start-session` → `sashiki ...`)。どうしても
+  リモートから admin が要るなら `admin_token = true` で `admin_token_ssm_path` に発行される
+  (revoke 不能な環境変数トークンなので、既定では発行しない)。
+- dev パスワードは Secrets Manager(`password_secret_arn`)。平文で state に近い形で
   持たない運用にすること(`terraform.tfstate` の暗号化・アクセス制限は前提)。
 - 単一ノード構成のため `reader_endpoint` は contract の形を揃える目的で `endpoint` と同じ値を返す。
 - データ EBS は既定で暗号化する(`data_volume_encrypted = true`、鍵は `kms_key_id` で利用者管理 KMS に
@@ -142,7 +149,8 @@ private 通信が前提)。
 export SASHIKI_API_URL=$(terraform output -raw api_url)
 export SASHIKI_API_TOKEN=$(aws ssm get-parameter --with-decryption \
   --name "$(terraform output -raw api_token_ssm_path)" --query Parameter.Value --output text)
-sashiki list
+sashiki list                       # branches scope: create / reset / delete / list は通る
+sashiki baseline gc                # → 403 insufficient_scope(admin はホスト上の loopback から)
 ```
 
 GitHub Action の `transport: api`(既定)はこの経路。runner が VPC 外にいるなら

@@ -199,11 +199,15 @@ IP=$(hostname -I | awk "{print \$1}")
 TOKEN=$(cat /var/tmp/sashiki-e2e-token)
 noauth=$(curl -s -o /dev/null -w "%{http_code}" "http://$IP:8080/v1/branches")
 auth=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" "http://$IP:8080/v1/branches")
-echo "ip=$IP noauth=$noauth auth=$auth"
+# provision.sh の token は既定の branches scope(Terraform の api_token_ssm_path と同じ形、#340)。
+# admin 専用の endpoint は 403 で拒否されること。
+admin=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "Authorization: Bearer $TOKEN" "http://$IP:8080/v1/gc/orphans")
+echo "ip=$IP noauth=$noauth auth=$auth admin=$admin"
 ') || fail "API の到達確認に失敗した"
 echo "  $out"
 grep -q "noauth=401" <<<"$out" || fail "loopback 以外からトークン無しで通ってしまう: $out"
 grep -q "auth=200" <<<"$out" || fail "loopback 以外からトークン付きで届かない(listen.api が loopback のまま?): $out"
+grep -q "admin=403" <<<"$out" || fail "branches scope のトークンで admin endpoint が通ってしまう(#340): $out"
 
 log "branch を作って proxy 経由で読む"
 out=$(ssm '

@@ -100,6 +100,12 @@ variable "proxy_user" {
   default     = "dev"
 }
 
+variable "admin_token" {
+  description = "運用者向けの admin トークン(環境変数 SASHIKI_API_TOKEN)を発行して /<name>/sashiki/admin-token に置く。既定 false: api_token_ssm_path は revoke 可能な branches scope の state.db トークンだけを指し、admin 操作はホスト上の loopback(SSM セッション)から行う(#340)"
+  type        = bool
+  default     = false
+}
+
 variable "sashiki_ref" {
   # 空(既定)なら module 同梱の deploy/terraform/VERSION(= その module ref の
   # タグ)を使う(#199)。つまり利用側は source の ?ref=vX.Y.Z を固定するだけでよく、

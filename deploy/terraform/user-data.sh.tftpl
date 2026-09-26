@@ -24,8 +24,6 @@ POOL="${pool}"
 
 # --- シークレット取得(instance role)。set +x で cloud-init ログへの平文残留を防ぐ(#165) ---
 set +x
-API_TOKEN="$(aws ssm get-parameter --with-decryption --region "$REGION" \
-  --name "${api_token_ssm_path}" --query 'Parameter.Value' --output text)"
 DEV_PASSWORD="$(aws secretsmanager get-secret-value --region "$REGION" \
   --secret-id "${dev_secret_arn}" --query 'SecretString' --output text)"
 set -x
@@ -96,12 +94,35 @@ if [ -f "$CONFIG" ]; then
     || echo "sashiki: 警告 listen.api を 0.0.0.0:8080 に書き換えられなかった。api_url には届かない" >&2
 fi
 
-# --- API トークンを sashikid の環境に渡す ---
+# --- CI / Action 用の API トークン(#340) ---
+# state.db(data EBS に永続化済み)に branches scope で発行し、平文は SSM(api_token_ssm_path)
+# にだけ置く。list / revoke / rotate は `sashiki token` で行える。置換後の EC2 でも同じ
+# state.db なので、同名を revoke してから発行し直す(平文は旧インスタンスと共に消えている)。
+set +x
+sashiki token revoke ci >/dev/null 2>&1 || true
+CI_TOKEN="$(sashiki token create --name ci --scope branches | grep -oE 'sashiki_[0-9a-f]{64}')"
+[ -n "$CI_TOKEN" ] || { echo "sashiki: branches トークンを発行できませんでした" >&2; exit 1; }
+aws ssm put-parameter --region "$REGION" --name "${api_token_ssm_path}" \
+  --type SecureString --value "$CI_TOKEN" --overwrite > /dev/null
+unset CI_TOKEN
+set -x
+
+# --- 運用者向け admin トークン(opt-in)。SASHIKI_API_TOKEN として sashikid の環境に渡す ---
 install -d -m 0755 /etc/sashiki
 umask 077
+%{ if admin_token_ssm_path != "" ~}
+set +x
+ADMIN_TOKEN="$(aws ssm get-parameter --with-decryption --region "$REGION" \
+  --name "${admin_token_ssm_path}" --query 'Parameter.Value' --output text)"
 # deb の sashikid.service が読む EnvironmentFile と同じ名前にする(#328: 以前は
 # /etc/sashiki/env に書いて drop-in で補っていた)。
-printf 'SASHIKI_API_TOKEN=%s\n' "$API_TOKEN" > /etc/sashiki/sashikid.env
+printf 'SASHIKI_API_TOKEN=%s\n' "$ADMIN_TOKEN" > /etc/sashiki/sashikid.env
+unset ADMIN_TOKEN
+%{ else ~}
+# admin トークンは発行しない(admin_token = false)。admin 操作はホスト上の loopback から
+# (`aws ssm start-session` → `sashiki ...`)。env ファイルは空にして旧 admin トークンを残さない。
+: > /etc/sashiki/sashikid.env
+%{ endif ~}
 set -x
 # unit が EnvironmentFile=/etc/sashiki/sashikid.env を読む前提。無ければ drop-in で補う。
 if ! grep -q "EnvironmentFile=-\?/etc/sashiki/sashikid.env" /etc/systemd/system/sashikid.service 2>/dev/null; then
