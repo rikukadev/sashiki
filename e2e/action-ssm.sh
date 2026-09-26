@@ -35,7 +35,8 @@ case "$2" in
       file://*)
         python3 -c 'import json,sys
 doc=json.load(open(sys.argv[1]))
-open(sys.argv[2],"w").write(doc["commands"][0])' "${params#file://}" "$SASHIKI_FAKE_SENT"
+open(sys.argv[2],"w").write(doc["commands"][0])
+open(sys.argv[2]+".all","a").write(doc["commands"][0]+"\n---\n")' "${params#file://}" "$SASHIKI_FAKE_SENT"
         ;;
       *)
         # shorthand は改行を含む値を保てない。届いた形をそのまま記録して
@@ -91,6 +92,36 @@ bash -n <<<"$(cat "$SASHIKI_FAKE_SENT")" || fail "create のスクリプトが s
 grep -qx "port=3306" "$out"          || fail "port は proxy のものを出すべき: $(cat "$out")"
 grep -qx "user=dev@pr-2" "$out"      || fail "user が proxy 形式でない: $(cat "$out")"
 grep -qx "host=sashiki.internal" "$out" || fail "host が出ていない: $(cat "$out")"
+echo "  OK"
+
+echo "=== #339: シェルのメタ文字を含む branch / profile は送信前に拒否する ==="
+for bad in "x'; touch /tmp/pwned; #" 'pr-1$(id)' 'pr-1`id`' "pr-1
+id" 'pr 1' '-rf'; do
+  rm -f "$SASHIKI_FAKE_SENT"
+  if SASHIKI_ACTION=delete SASHIKI_BRANCH="$bad" bash "$ENTRY" > /dev/null 2>&1; then
+    fail "branch $(printf %q "$bad") が拒否されなかった"
+  fi
+  [ -e "$SASHIKI_FAKE_SENT" ] && fail "branch $(printf %q "$bad") で SSM にコマンドが送られた:
+$(cat "$SASHIKI_FAKE_SENT")"
+done
+rm -f "$SASHIKI_FAKE_SENT" "$SASHIKI_FAKE_SENT.all"
+if SASHIKI_ACTION=create SASHIKI_PROFILE="ci'; id; #" bash "$ENTRY" > /dev/null 2>&1; then
+  fail "profile の注入が拒否されなかった"
+fi
+[ -e "$SASHIKI_FAKE_SENT" ] && fail "不正な profile で SSM にコマンドが送られた"
+# 正常な値は 1 引数ずつクォートされて届く(api と同じく . _ - を許す)
+: > "$SASHIKI_FAKE_STDOUT"
+cat > "$SASHIKI_FAKE_STDOUT" <<'JSON'
+{"name":"feat_x.1","port":3306,"engine_port":3401,"host":"sashiki.internal","user":"dev@feat_x.1"}
+JSON
+rm -f "$SASHIKI_FAKE_SENT.all"
+SASHIKI_ACTION=create SASHIKI_BRANCH=feat_x.1 SASHIKI_PROFILE=preview bash "$ENTRY" > /dev/null || fail "正常な branch / profile が通らない"
+sent=$(cat "$SASHIKI_FAKE_SENT.all")   # create → show --json の順に 2 本送られる
+grep -q "sashiki create 'feat_x.1' --profile 'preview'" <<<"$sent" || fail "create の引数がクォートされていない:
+$sent"
+grep -q "sashiki show 'feat_x.1' --json" <<<"$sent" || fail "show の引数がクォートされていない:
+$sent"
+bash -n <<<"$(cat "$SASHIKI_FAKE_SENT")" || fail "届いたスクリプトが shell として壊れている"
 echo "  OK"
 
 echo "ACTION SSM E2E PASSED"

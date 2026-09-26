@@ -169,8 +169,8 @@ hook は sashikid と同じユーザー・環境で走る(API トークンだけ
 | `api_url` | — | `transport: api` のとき必須 |
 | `token` | — | API トークン |
 | `action` | — | `create` \| `delete` \| `reset`。省略時は PR イベントから決める(ラベル駆動で使う) |
-| `branch` | `pr-<番号>` | ブランチ名 |
-| `profile` | サーバー既定 | lifecycle profile |
+| `branch` | `pr-<番号>` | ブランチ名。英数字と `.` `_` `-`(64 文字まで)以外は送信前に拒否(#339) |
+| `profile` | サーバー既定 | lifecycle profile(`branch` と同じ文字集合) |
 | `source` | 自動生成 | provenance の JSON |
 | `on_close` | `delete` | `delete` \| `keep`(TTL 回収に任せる) |
 | `comment` | `false` | PR に接続先をコメントする(`pull-requests: write` が要る) |

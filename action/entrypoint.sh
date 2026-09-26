@@ -28,6 +28,20 @@ case "$TRANSPORT" in
   *)   echo "sashiki: transport '$TRANSPORT' is not supported (api|ssm)" >&2; exit 1 ;;
 esac
 
+# 入力の検証(#339)。transport=ssm は値をリモートのシェルスクリプトに埋めるので、
+# 単引用符や $() を含む値を受けると EC2 上で任意コマンドになる。サーバー側の
+# name_pattern(既定 ^[a-z0-9-]{1,32}$)より広いが、シェルのメタ文字は一切含まない
+# 集合に client 側でも絞る。api transport でも同じ検証を通す(URL パスに入るため)。
+SAFE_NAME='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+if ! [[ "$SASHIKI_BRANCH" =~ $SAFE_NAME ]]; then
+  echo "sashiki: branch '${SASHIKI_BRANCH}' は使えない文字を含む(英数字と . _ - のみ、64 文字まで)" >&2
+  exit 1
+fi
+if [ -n "${SASHIKI_PROFILE:-}" ] && ! [[ "$SASHIKI_PROFILE" =~ $SAFE_NAME ]]; then
+  echo "sashiki: profile '${SASHIKI_PROFILE}' は使えない文字を含む(英数字と . _ - のみ)" >&2
+  exit 1
+fi
+
 auth=()
 if [ -n "${SASHIKI_API_TOKEN:-}" ]; then
   auth=(-H "Authorization: Bearer ${SASHIKI_API_TOKEN}")
@@ -107,9 +121,29 @@ with open(os.environ["SASHIKI_SSM_PARAMS"], "w") as f:
   printf '%s' "$out"
 }
 
+# shq <s>: POSIX シェルの単引用符リテラルにする(' は '\'' に)。入力は上で検証済みだが、
+# リモートへ渡す文字列は必ずここを通し、値の直接連結をしない(#339)。
+shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# ssm_cli <cmd> <sub> <argv...>: コマンド名・サブコマンド・`--` で始まるフラグ名は
+# 固定文字列なので素のまま、それ以外(ブランチ名・profile などの値)は 1 個ずつ
+# クォートした 1 行のコマンドを返す。create / delete / reset / show の SSM 経路は
+# 全部これで組み立てる。
+ssm_cli() {
+  local out="$1 $2" a
+  shift 2
+  for a in "$@"; do
+    case "$a" in
+      --*) out+=" $a" ;;
+      *)   out+=" $(shq "$a")" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
 # ssm_branch_json <branch>: show --json の結果を $RESP に落とす(api() と同じ形にする)
 ssm_branch_json() {
-  ssm_run "sashiki show '$1' --json" > "$RESP"
+  ssm_run "$(ssm_cli sashiki show "$1" --json)" > "$RESP"
 }
 
 # create の body を組み立てる。source は JSON として埋め込むため python で安全に構築する
@@ -141,10 +175,15 @@ PY
 do_create() {
   local created
   if [ "$TRANSPORT" = "ssm" ]; then
-    local prof=""
-    [ -n "${SASHIKI_PROFILE:-}" ] && prof=" --profile '${SASHIKI_PROFILE}'"
+    local show create
+    show=$(ssm_cli sashiki show "$SASHIKI_BRANCH")
+    if [ -n "${SASHIKI_PROFILE:-}" ]; then
+      create=$(ssm_cli sashiki create "$SASHIKI_BRANCH" --profile "$SASHIKI_PROFILE")
+    else
+      create=$(ssm_cli sashiki create "$SASHIKI_BRANCH")
+    fi
     # 既にあれば作らない(冪等)。エラーを握りつぶさず、失敗はそのまま出す。
-    ssm_run "if ! sashiki show '${SASHIKI_BRANCH}' >/dev/null 2>&1; then sashiki create '${SASHIKI_BRANCH}'${prof} >&2; fi" >/dev/null
+    ssm_run "if ! $show >/dev/null 2>&1; then $create >&2; fi" >/dev/null
     ssm_branch_json "$SASHIKI_BRANCH"
     created=unknown  # SSM 経由では新規/既存の区別を取らない
   else
@@ -182,8 +221,11 @@ do_delete() {
   if [ "$TRANSPORT" = "ssm" ]; then
     # 冪等にする: delete が失敗しても「もう存在しない」なら成功扱い。
     # 逆にまだ残っているなら本当の失敗なので非 0 で落とす。
-    ssm_run "if ! sashiki delete '${SASHIKI_BRANCH}' >&2; then
-               if sashiki show '${SASHIKI_BRANCH}' >/dev/null 2>&1; then exit 1; fi
+    local del show
+    del=$(ssm_cli sashiki delete "$SASHIKI_BRANCH")
+    show=$(ssm_cli sashiki show "$SASHIKI_BRANCH")
+    ssm_run "if ! $del >&2; then
+               if $show >/dev/null 2>&1; then exit 1; fi
              fi" >/dev/null
     echo "sashiki: branch '${SASHIKI_BRANCH}' deleted (or already absent)"
     return 0
@@ -205,7 +247,7 @@ do_delete() {
 # reset は「作成時点へ戻す」。ラベル駆動などで明示的に呼ぶ(#244)。
 do_reset() {
   if [ "$TRANSPORT" = "ssm" ]; then
-    ssm_run "sashiki reset '${SASHIKI_BRANCH}' >&2" >/dev/null
+    ssm_run "$(ssm_cli sashiki reset "$SASHIKI_BRANCH") >&2" >/dev/null
     ssm_branch_json "$SASHIKI_BRANCH"
   else
     local code
