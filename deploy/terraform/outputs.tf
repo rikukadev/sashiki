@@ -48,8 +48,14 @@ output "api_url" {
 }
 
 output "api_token_ssm_path" {
-  description = "API トークン(SecureString)を保存した SSM パラメータ名"
+  description = "CI / Action 用 API トークン(branches scope の state.db トークン。SecureString)を保存した SSM パラメータ名。値は bootstrap でインスタンスが書く"
   value       = aws_ssm_parameter.api_token.name
+  depends_on  = [aws_ssm_association.bootstrap_ready]
+}
+
+output "admin_token_ssm_path" {
+  description = "運用者向け admin トークン(SASHIKI_API_TOKEN)の SSM パラメータ名。admin_token = true のときだけ"
+  value       = var.admin_token ? aws_ssm_parameter.admin_token[0].name : null
 }
 
 output "instance_id" {

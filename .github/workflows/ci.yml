@@ -26,6 +26,23 @@ jobs:
         with:
           version: latest
 
+  # Terraform モジュール: fmt / validate / terraform test(mock provider)。AWS 資格情報は要らない。
+  # 暗号化の既定や「user-data に秘密を埋めない」のような不変条件を plan で固定する(#341 / #342)。
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.7"
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+      - run: terraform test
+
   # 既知の脆弱性(Go の脆弱性 DB)チェック。必須 check にはしない
   # (新規 CVE 公開で無関係な PR がブロックされるのを避けるため advisory 運用)。
   vuln:

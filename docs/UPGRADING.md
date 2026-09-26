@@ -6,6 +6,50 @@
 
 v0.x の間は API / config が固定されていないので、マイナー版で挙動が変わることがある。
 
+## 0.12.0 → 0.12.x
+
+### Terraform: データ EBS が既定で暗号化される(#341)
+
+新規に作る data EBS は `encrypted = true`(`kms_key_id` で利用者管理 KMS も可)。**v0.12.0 以前に作った
+環境**は volume が非暗号化のまま module を更新すると、plan が「`encrypted` の変更 → 作り直し」になり
+`prevent_destroy` で止まる(データは消えない)。どちらかを選ぶ:
+
+- 当面そのまま使う: `data_volume_encrypted = false` を明示する(plan の差分が消える)
+- 暗号化 volume へ移行する(ダウンタイムあり):
+  1. `sashiki drain` → `sudo systemctl stop sashikid` → `sudo zpool export tank`
+  2. `aws ec2 create-snapshot --volume-id <旧 volume>` → 完了を待つ
+  3. `aws ec2 create-volume --snapshot-id <snapshot> --availability-zone <AZ> --encrypted [--kms-key-id <key>] --volume-type gp3`
+  4. `terraform state rm module.<name>.aws_ebs_volume.data` → `terraform import module.<name>.aws_ebs_volume.data <新 volume>`
+     (`aws_volume_attachment.data` も `state rm` してから import する。id は `vai-` + `<device>:<volume>:<instance>` の形)
+  5. `terraform apply`(差分が attach の付け替えだけになることを確認)→ 旧 volume を detach し、新 volume を
+     同じ device 名で attach → `sudo zpool import -f tank` → `sudo systemctl start sashikid`
+  6. 動作確認後に旧 volume を削除する
+
+### Terraform: `api_token_ssm_path` が revoke 可能な `branches` トークンになる(#340)
+
+これまで `api_token_ssm_path` の値は環境変数 `SASHIKI_API_TOKEN` に渡す **admin** トークン
+(revoke 不能)だった。0.12.x からは bootstrap でインスタンスが `sashiki token create --name ci
+--scope branches` で発行した state.db トークンを置き、Terraform は値を管理しない。
+
+- **新規インスタンス / 置換後**: 自動でこの形になる。CI(GitHub Action、`transport: api`)は
+  そのまま動くが、admin 操作(`baseline publish` / `drain` / `gc` / データブラウザ)はこの
+  トークンでは 403 になる。ホスト上の loopback から行う(`aws ssm start-session --target <instance_id>`
+  → `sashiki ...`)。リモートから admin が要るなら `admin_token = true`
+- **既存インスタンス**(置換しない場合): `api_token_ssm_path` の値は `ignore_changes` なので旧 admin
+  トークンのまま動き続ける(無停止)。絞るなら、ホスト上で
+  `sudo sashiki token create --name ci --scope branches` の平文を
+  `aws ssm put-parameter --name <api_token_ssm_path> --type SecureString --value ... --overwrite` で入れ替え、
+  `/etc/sashiki/sashikid.env` を空にして `sudo systemctl restart sashikid`(admin_token = false なら
+  次の置換で自動的にこの状態になる)
+- 呼び出し側で `random_password.api_token` を参照していた場合は `admin_token = true` +
+  `admin_token_ssm_path` に置き換える
+
+### Terraform: `github_token` 入力を削除(#342)
+
+private リポジトリ向けの `github_token` は user-data(EC2 属性)と cloud-init ログに平文で残るため削除した。
+呼び出し側に `github_token = ...` が残っていると `Unsupported argument` になるので消す。値を渡していた
+場合はその token を GitHub 側で失効させる(user-data に残っている)。
+
 ## 0.11.x → 0.12.0
 
 ### root 操作が `sashiki-root-helper` 経由になる(#276)

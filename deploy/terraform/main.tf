@@ -39,7 +39,9 @@ resource "random_password" "dev" {
   special = false
 }
 
-resource "random_password" "api_token" {
+# admin トークンは opt-in(#340)。既定では発行しない。
+resource "random_password" "admin_token" {
+  count   = var.admin_token ? 1 : 0
   length  = 40
   special = false
 }
@@ -54,10 +56,28 @@ resource "aws_secretsmanager_secret_version" "dev_password" {
   secret_string = random_password.dev.result
 }
 
+# CI / Action に配る API トークン(#340)。値は user-data が `sashiki token create --scope branches`
+# で state.db に発行した平文を put-parameter で入れる(list / revoke / rotate できる。
+# state.db は data EBS に永続化されるので compute replacement でも失わない)。Terraform は
+# 置き場所だけを作り、値は管理しない(ignore_changes)。
 resource "aws_ssm_parameter" "api_token" {
-  name  = "/${var.name}/sashiki/api-token"
+  name        = "/${var.name}/sashiki/api-token"
+  description = "sashiki API token (branches scope, issued by the instance at bootstrap)"
+  type        = "SecureString"
+  value       = "pending-bootstrap"
+  tags        = local.tags
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+# 運用者向けの admin トークン(opt-in)。SASHIKI_API_TOKEN として sashikid の環境に渡す。
+resource "aws_ssm_parameter" "admin_token" {
+  count = var.admin_token ? 1 : 0
+  name  = "/${var.name}/sashiki/admin-token"
   type  = "SecureString"
-  value = random_password.api_token.result
+  value = random_password.admin_token[0].result
   tags  = local.tags
 }
 
@@ -118,10 +138,19 @@ data "aws_iam_policy_document" "secrets" {
     actions   = ["secretsmanager:GetSecretValue"]
     resources = [aws_secretsmanager_secret.dev_password.arn]
   }
+  # bootstrap で発行した branches トークンを置く(読む必要はない)。
   statement {
-    sid       = "ReadApiToken"
-    actions   = ["ssm:GetParameter"]
+    sid       = "WriteApiToken"
+    actions   = ["ssm:PutParameter"]
     resources = [aws_ssm_parameter.api_token.arn]
+  }
+  dynamic "statement" {
+    for_each = var.admin_token ? [1] : []
+    content {
+      sid       = "ReadAdminToken"
+      actions   = ["ssm:GetParameter"]
+      resources = [aws_ssm_parameter.admin_token[0].arn]
+    }
   }
 }
 
@@ -168,7 +197,13 @@ resource "aws_ebs_volume" "data" {
   availability_zone = data.aws_subnet.selected.availability_zone
   size              = var.allocated_storage
   type              = var.ebs_type
-  tags              = merge(local.tags, { "Name" = "${var.name}-data" })
+  # baseline・全ブランチ・state.db が載る volume なので既定で暗号化する(#341)。
+  # encrypted の変更は volume の作り直しになるが prevent_destroy が止める。
+  # 既存の非暗号化 volume は data_volume_encrypted=false で維持するか、UPGRADING の
+  # 手順(snapshot → 暗号化コピー → state の差し替え)で移行する。
+  encrypted  = var.data_volume_encrypted
+  kms_key_id = var.kms_key_id != "" ? var.kms_key_id : null
+  tags       = merge(local.tags, { "Name" = "${var.name}-data" })
 
   lifecycle {
     prevent_destroy = true
@@ -212,10 +247,10 @@ resource "aws_instance" "this" {
     data_volume_id       = aws_ebs_volume.data.id
     pool                 = "tank"
     proxy_user           = var.proxy_user
-    github_token         = var.github_token
     sashiki_ref          = local.sashiki_ref
     dev_secret_arn       = aws_secretsmanager_secret.dev_password.arn
     api_token_ssm_path   = aws_ssm_parameter.api_token.name
+    admin_token_ssm_path = var.admin_token ? aws_ssm_parameter.admin_token[0].name : ""
     persist_state_script = local.persist_state_script
   })
 

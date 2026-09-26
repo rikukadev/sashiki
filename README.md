@@ -214,7 +214,7 @@ API(= sashikid)への認証は「**ローカルは素通し、外から叩くと
 | `branches`(`token create` の既定) | ブランチの create / reset / recreate / delete / retry / lease / sleep / wake、一覧・詳細・operation・capacity の読み取り | CI / GitHub Action に配る |
 | `admin` | 上に加え、baseline の build / validate / publish / set / promote / delete / gc、`drain`、`gc --orphans`、**データブラウザ(任意 SQL)**、hook の手動実行 | 運用者 |
 
-loopback からの無認証アクセスと、`SASHIKI_API_TOKEN` 環境変数で渡すトークン(Terraform 生成)は `admin`。
+loopback からの無認証アクセスと、`SASHIKI_API_TOKEN` 環境変数で渡すトークンは `admin`(Terraform は既定で発行しない。`api_token_ssm_path` は `branches` の state.db トークン、#340)。
 CI に配るのは `branches` にしておくと、GitHub Secrets が漏れても baseline の差し替えや
 任意 SQL(app_user は MySQL `GRANT ALL` / Postgres `SUPERUSER` なので OS コマンド実行に等しい)までは届かない。
 データブラウザと hook 手動実行は「誰が何を流したか」を sashikid のログに残す。
@@ -343,8 +343,8 @@ Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したと�
 > v0.11.0 以前から更新する既存環境は、まず**置換なしで apply**して state.db の移行を完了し、
 > その次の apply で置換する。module 更新と `-replace` を同じ plan に入れてはいけない。
 
-モジュールは MySQL 専用(Postgres を選ぶ変数は無い)で、データ EBS の暗号化指定とバックアップ(snapshot)は
-していない。`prevent_destroy` は「消えない」保証で「戻せる」保証ではないので、要るなら AWS Backup 等を別途掛ける。
+モジュールは MySQL 専用(Postgres を選ぶ変数は無い)。データ EBS は既定で暗号化する(`kms_key_id` で
+利用者管理 KMS も可)が、バックアップ(snapshot)はしていない。`prevent_destroy` は「消えない」保証で「戻せる」保証ではないので、要るなら AWS Backup 等を別途掛ける。
 MySQL の版は AMI の apt パッケージで決まる。未使用だった `engine_version` 入力は、指定すれば版が変わるという誤解を避けるため削除した。
 
 ---

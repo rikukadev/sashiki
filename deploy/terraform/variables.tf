@@ -58,6 +58,18 @@ variable "ebs_type" {
   default     = "gp3"
 }
 
+variable "data_volume_encrypted" {
+  description = "データ EBS(baseline / 全ブランチ / state.db)を暗号化する。既定 true(#341)。既存の非暗号化 volume を持つ環境は、移行するまで false にして prevent_destroy との衝突を避ける(docs/UPGRADING.md)"
+  type        = bool
+  default     = true
+}
+
+variable "kms_key_id" {
+  description = "データ EBS の暗号化に使う KMS key の ARN。空なら AWS 管理キー(aws/ebs)"
+  type        = string
+  default     = ""
+}
+
 variable "data_device_name" {
   description = "データ EBS のデバイス名(user-data の zpool 作成に渡す)"
   type        = string
@@ -88,11 +100,10 @@ variable "proxy_user" {
   default     = "dev"
 }
 
-variable "github_token" {
-  description = "install.sh が private リポジトリから deb を取得するための token(public 化後は不要)"
-  type        = string
-  default     = ""
-  sensitive   = true
+variable "admin_token" {
+  description = "運用者向けの admin トークン(環境変数 SASHIKI_API_TOKEN)を発行して /<name>/sashiki/admin-token に置く。既定 false: api_token_ssm_path は revoke 可能な branches scope の state.db トークンだけを指し、admin 操作はホスト上の loopback(SSM セッション)から行う(#340)"
+  type        = bool
+  default     = false
 }
 
 variable "sashiki_ref" {
