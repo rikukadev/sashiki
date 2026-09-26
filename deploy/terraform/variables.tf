@@ -88,11 +88,15 @@ variable "proxy_user" {
   default     = "dev"
 }
 
-variable "github_token" {
-  description = "install.sh が private リポジトリから deb を取得するための token(public 化後は不要)"
+variable "github_token_ssm_parameter_arn" {
+  description = "private リポジトリから取得するときの GitHub token を保存した SSM SecureString parameter ARN。token 値そのものは渡さない"
   type        = string
   default     = ""
-  sensitive   = true
+
+  validation {
+    condition     = var.github_token_ssm_parameter_arn == "" || can(regex("^arn:[^:]+:ssm:[^:]+:[0-9]{12}:parameter/.+$", var.github_token_ssm_parameter_arn))
+    error_message = "github_token_ssm_parameter_arn には SSM parameter ARN を指定してください(token 値や parameter 名は不可)。"
+  }
 }
 
 variable "sashiki_ref" {

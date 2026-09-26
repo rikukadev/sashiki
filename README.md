@@ -325,6 +325,10 @@ EC2 + EBS(prevent_destroy)+ SG + IAM + Route53 + Secrets/SSM を 1 apply。
 SSM が cloud-init と health endpoint を待つため、apply 完了時点で sashikid が応答する。
 詳細は [deploy/terraform/README.md](deploy/terraform/)。
 
+private repositoryから取得する場合もGitHub token本体はmoduleへ渡さない。利用側で
+SSM SecureStringに保存し、そのARNを`github_token_ssm_parameter_arn`へ渡す。EC2は
+instance roleで起動時に取得するため、render済みuser-dataやEC2属性へtokenが残らない。
+
 出力 `api_url` は **http**(TLS 終端なし)で、`allowed_sg_ids` の SG からだけ届く。
 VPC 外(GitHub-hosted runner 等)からは Action の `transport: ssm` を使う。
 Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したときだけ作られ、

@@ -24,8 +24,9 @@ module "db" {
   route53_zone_id = var.internal_zone_id
   dns_name        = "db.internal.example.com"
 
-  # リポジトリが private のときだけ要る(public なら省略)
-  # github_token = var.github_token
+  # リポジトリが private のときだけ要る(public なら省略)。token値ではなく、
+  # 同じregionに別途作成したSSM SecureStringのARNを渡す
+  # github_token_ssm_parameter_arn = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/myapp/sashiki/github-token"
   sashiki_ref  = "v0.12.0" # バイナリとモジュールは同じ ref で固定する x-release-please-version
 }
 ```
@@ -126,6 +127,11 @@ apply 後にサイズが戻ったら通常運用に戻る。
 - API トークンは SSM SecureString(`api_token_ssm_path`)。dev パスワードは
   Secrets Manager(`password_secret_arn`)。どちらも平文で state に近い形で
   持たない運用にすること(`terraform.tfstate` の暗号化・アクセス制限は前提)。
+- private repositoryからインストールする場合は、GitHub tokenを利用側でSSM
+  SecureStringに保存し、`github_token_ssm_parameter_arn`へそのARNだけを渡す。
+  moduleはinstance roleへそのparameterの`ssm:GetParameter`だけを追加し、起動時の
+  xtrace停止中に取得・使用する。customer managed KMS keyなら、利用側でroleへ
+  `kms:Decrypt`も追加する。token値をTerraform変数へ直接渡してはいけない。
 - 単一ノード構成のため `reader_endpoint` は contract の形を揃える目的で `endpoint` と同じ値を返す。
 - データ EBS は暗号化を明示せず、AWS Backup / 定期 snapshot も設定しない。
   `prevent_destroy` は復元手段ではないため、必要なら利用側で暗号化とバックアップを設計する。

@@ -31,11 +31,17 @@ DEV_PASSWORD="$(aws secretsmanager get-secret-value --region "$REGION" \
 set -x
 
 # --- sashiki のインストール(deb)。sashiki_ref がタグなら releases の直リンクで取得する
-#     (latest API 経由のパース失敗を避ける、#166)。github_token は private 時のみ ---
-%{ if github_token != "" ~}
-curl -fsSL -H "Authorization: Bearer ${github_token}" \
-  "https://raw.githubusercontent.com/rikukadev/sashiki/${sashiki_ref}/install.sh" \
-  | SASHIKI_RELEASE="${sashiki_ref}" GITHUB_TOKEN="${github_token}" bash
+#     (latest API 経由のパース失敗を避ける、#166)。private repo 用tokenは
+#     user-dataへ埋めず、instance roleでSSM SecureStringから実行時にだけ読む(#342) ---
+%{ if github_token_ssm_parameter_arn != "" ~}
+set +x
+GITHUB_TOKEN="$(aws ssm get-parameter --with-decryption --region "$REGION" \
+  --name "${github_token_ssm_parameter_arn}" --query 'Parameter.Value' --output text)"
+printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" \
+  | curl --config - -fsSL "https://raw.githubusercontent.com/rikukadev/sashiki/${sashiki_ref}/install.sh" \
+  | SASHIKI_RELEASE="${sashiki_ref}" GITHUB_TOKEN="$GITHUB_TOKEN" bash
+unset GITHUB_TOKEN
+set -x
 %{ else ~}
 curl -fsSL "https://raw.githubusercontent.com/rikukadev/sashiki/${sashiki_ref}/install.sh" \
   | SASHIKI_RELEASE="${sashiki_ref}" bash

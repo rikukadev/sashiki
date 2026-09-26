@@ -116,3 +116,29 @@
 **理由**: 検証をコード(テスト可能な純関数 + negative test)に置けば、許可外 dataset・追加フラグ・任意 property・任意 unit を確実に拒否できる。デーモン + IPC にしない(sudo が認証・監査ログを持っており、exec 1 回の helper で十分)。
 
 **関連**: #276、#78、仕様 20-3。
+
+## ADR-011: private repository用GitHub tokenは利用側SSMのARNだけを受け取る
+
+**背景**: Terraform moduleの`github_token`入力は`sensitive = true`でも、値を
+`templatefile`へ渡すためrender済みuser-data、Terraform state、EC2 user-data属性へ残る。
+さらに起動スクリプトがxtraceを再開してからAuthorization headerへ展開しており、
+cloud-init logにもtokenを記録していた(#342)。
+
+**決定**:
+1. token値を受け取る`github_token`入力を削除し、利用側が作ったSSM SecureStringの
+   ARNを受け取る`github_token_ssm_parameter_arn`へ置き換える。
+2. moduleは指定されたparameter ARNだけをuser-dataへ渡し、instance roleにはそのARNの
+   `ssm:GetParameter`だけを追加する。値はEC2起動時に`--with-decryption`で取得する。
+3. secretの取得、Authorization header、install.sh実行、変数の破棄まではxtraceを停止する。
+4. customer managed KMS keyの`kms:Decrypt`は、key policyを所有する利用側がroleへ追加する。
+   moduleへkey ARN入力を増やして暗黙に権限を広げない。
+
+**理由**: moduleがsecret値を受け取らなければ、Terraformが生成・保存するuser-dataへ
+secretを混入させる経路自体が無くなる。parameterをmodule内で作る案はtokenを引き続き
+Terraform stateへ保存するため採らない。private repository対応は保ちつつ、secretの所有と
+rotationを利用側へ戻せる。
+
+**移行**: 旧tokenは既にuser-data/state/logへ残った可能性があるため失効し、新規tokenを
+SecureStringへ保存してARN入力へ切り替える。詳細は`docs/UPGRADING.md`。
+
+**関連**: #342、#165。

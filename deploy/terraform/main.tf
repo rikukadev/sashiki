@@ -123,6 +123,14 @@ data "aws_iam_policy_document" "secrets" {
     actions   = ["ssm:GetParameter"]
     resources = [aws_ssm_parameter.api_token.arn]
   }
+  dynamic "statement" {
+    for_each = var.github_token_ssm_parameter_arn == "" ? [] : [var.github_token_ssm_parameter_arn]
+    content {
+      sid       = "ReadGitHubToken"
+      actions   = ["ssm:GetParameter"]
+      resources = [statement.value]
+    }
+  }
 }
 
 resource "aws_iam_role" "this" {
@@ -208,21 +216,25 @@ resource "aws_instance" "this" {
   }
 
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    data_device          = var.data_device_name
-    data_volume_id       = aws_ebs_volume.data.id
-    pool                 = "tank"
-    proxy_user           = var.proxy_user
-    github_token         = var.github_token
-    sashiki_ref          = local.sashiki_ref
-    dev_secret_arn       = aws_secretsmanager_secret.dev_password.arn
-    api_token_ssm_path   = aws_ssm_parameter.api_token.name
-    persist_state_script = local.persist_state_script
+    data_device                    = var.data_device_name
+    data_volume_id                 = aws_ebs_volume.data.id
+    pool                           = "tank"
+    proxy_user                     = var.proxy_user
+    github_token_ssm_parameter_arn = var.github_token_ssm_parameter_arn
+    sashiki_ref                    = local.sashiki_ref
+    dev_secret_arn                 = aws_secretsmanager_secret.dev_password.arn
+    api_token_ssm_path             = aws_ssm_parameter.api_token.name
+    persist_state_script           = local.persist_state_script
   })
 
   # user-data と device 名が変わってもデータ EBS は作り直さない。
   lifecycle {
     ignore_changes = [ami]
   }
+
+  # user-dataは起動直後にSSM/Secrets Managerを読む。inline policyより先に
+  # instanceが起動すると一度きりのcloud-initがAccessDeniedで終わるため直列化する。
+  depends_on = [aws_iam_role_policy.secrets]
 }
 
 # user-data は EC2 の起動完了を意味しない。Association を apply の完了条件にして、

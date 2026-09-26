@@ -198,7 +198,7 @@ close で delete(既に無ければ成功扱い)、それ以外のイベント�
 | `key_name` | `""` | SSH 鍵(SSM があれば不要) |
 | `proxy_user` | `dev` | アプリ用ユーザー名 |
 | `sashiki_ref` | モジュール同梱の `VERSION` | install.sh の取得元 |
-| `github_token` | `""` | private リポジトリから取るとき |
+| `github_token_ssm_parameter_arn` | `""` | private リポジトリ用tokenを保存したSSM SecureStringのARN(token値は不可) |
 | `tags` | `{}` | 追加タグ |
 
 出力は `endpoint` / `reader_endpoint`(同値)/ `port` / `username` / `branch_user` /

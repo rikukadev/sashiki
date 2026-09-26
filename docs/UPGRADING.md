@@ -6,6 +6,36 @@
 
 v0.x の間は API / config が固定されていないので、マイナー版で挙動が変わることがある。
 
+## 0.12.x → 次のリリース
+
+### Terraformの`github_token`入力をSSM parameter ARNへ移行する(#342)
+
+private repository用の`github_token`入力は、tokenをrender済みuser-data・EC2属性・
+cloud-init logへ残すため削除した。使用していた環境は次の順で移行する。
+
+1. **旧tokenを直ちに失効する。** 既存のEC2 user-data、`/var/log/cloud-init-output.log`、
+   Terraform stateとその履歴には旧tokenが残り得る。必要ならGitHubの監査ログも確認する。
+2. contents readだけを持つ新しいfine-grained tokenを発行し、EC2と同じregionのSSM
+   SecureStringへ保存する。tokenを新しいTerraform stateにも残さないよう、CLI等で投入する。
+3. module呼び出しの`github_token = ...`を削除し、token値ではなくparameter ARNを渡す。
+
+```bash
+aws ssm put-parameter --region ap-northeast-1 --type SecureString \
+  --name /myapp/sashiki/github-token --value "$SASHIKI_GITHUB_TOKEN"
+```
+
+```hcl
+module "db" {
+  # ...
+  github_token_ssm_parameter_arn = "arn:aws:ssm:ap-northeast-1:123456789012:parameter/myapp/sashiki/github-token"
+}
+```
+
+apply後の新しいuser-dataにはparameter ARNだけが入り、EC2はinstance roleで起動時に
+tokenを取得する。既存インスタンスではuser-dataが再実行されないため、private repo用tokenを
+実際に切り替えて再bootstrapする場合は、データEBS/state.dbの移行手順を守ったうえでEC2を
+明示的に置換する。remote stateの旧versionはbackendの保持・アクセス制御方針に従って扱う。
+
 ## 0.11.x → 0.12.0
 
 ### root 操作が `sashiki-root-helper` 経由になる(#276)
