@@ -125,8 +125,11 @@ apply 後にサイズが戻ったら通常運用に戻る。
   Secrets Manager(`password_secret_arn`)。どちらも平文で state に近い形で
   持たない運用にすること(`terraform.tfstate` の暗号化・アクセス制限は前提)。
 - 単一ノード構成のため `reader_endpoint` は contract の形を揃える目的で `endpoint` と同じ値を返す。
-- データ EBS は暗号化を明示せず、AWS Backup / 定期 snapshot も設定しない。
-  `prevent_destroy` は復元手段ではないため、必要なら利用側で暗号化とバックアップを設計する。
+- データ EBS は既定で暗号化する(`data_volume_encrypted = true`、鍵は `kms_key_id` で利用者管理 KMS に
+  切り替え可。#341)。v0.12 以前に作った非暗号化 volume は `encrypted` の変更で作り直しになり
+  `prevent_destroy` が止めるので、[docs/UPGRADING.md](../../docs/UPGRADING.md) の手順で移行するか、
+  移行までは `data_volume_encrypted = false` を明示する。AWS Backup / 定期 snapshot は設定しないので、
+  `prevent_destroy` を復元手段と考えず、必要なら利用側でバックアップを設計する。
 
 ## API を VPC 内から使う(`api_url` + トークン)
 

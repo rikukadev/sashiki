@@ -168,7 +168,13 @@ resource "aws_ebs_volume" "data" {
   availability_zone = data.aws_subnet.selected.availability_zone
   size              = var.allocated_storage
   type              = var.ebs_type
-  tags              = merge(local.tags, { "Name" = "${var.name}-data" })
+  # baseline・全ブランチ・state.db が載る volume なので既定で暗号化する(#341)。
+  # encrypted の変更は volume の作り直しになるが prevent_destroy が止める。
+  # 既存の非暗号化 volume は data_volume_encrypted=false で維持するか、UPGRADING の
+  # 手順(snapshot → 暗号化コピー → state の差し替え)で移行する。
+  encrypted  = var.data_volume_encrypted
+  kms_key_id = var.kms_key_id != "" ? var.kms_key_id : null
+  tags       = merge(local.tags, { "Name" = "${var.name}-data" })
 
   lifecycle {
     prevent_destroy = true

@@ -192,6 +192,8 @@ close で delete(既に無ければ成功扱い)、それ以外のイベント�
 | `allocated_storage` | `100` | データ EBS(GiB)。ZFS プールになる |
 | `root_volume_size` | `30` | root EBS(GiB) |
 | `ebs_type` | `gp3` | データ EBS の種別 |
+| `data_volume_encrypted` | `true` | データ EBS を暗号化する(#341)。既存の非暗号化 volume は移行まで `false` |
+| `kms_key_id` | `""` | データ EBS の KMS key ARN(空なら `aws/ebs`) |
 | `data_device_name` | `/dev/xvdf` | デバイス名(Nitro では nvme に見えるので user-data が解決する) |
 | `ami_id` | 最新の Ubuntu 24.04 | 変更しても `ignore_changes` で作り直されない |
 | `route53_zone_id` / `dns_name` | `""` | 両方指定したときだけ A レコードを作る |

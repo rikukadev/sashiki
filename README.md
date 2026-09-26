@@ -343,8 +343,8 @@ Route53 レコードは `route53_zone_id` と `dns_name` を両方渡したと�
 > v0.11.0 以前から更新する既存環境は、まず**置換なしで apply**して state.db の移行を完了し、
 > その次の apply で置換する。module 更新と `-replace` を同じ plan に入れてはいけない。
 
-モジュールは MySQL 専用(Postgres を選ぶ変数は無い)で、データ EBS の暗号化指定とバックアップ(snapshot)は
-していない。`prevent_destroy` は「消えない」保証で「戻せる」保証ではないので、要るなら AWS Backup 等を別途掛ける。
+モジュールは MySQL 専用(Postgres を選ぶ変数は無い)。データ EBS は既定で暗号化する(`kms_key_id` で
+利用者管理 KMS も可)が、バックアップ(snapshot)はしていない。`prevent_destroy` は「消えない」保証で「戻せる」保証ではないので、要るなら AWS Backup 等を別途掛ける。
 MySQL の版は AMI の apt パッケージで決まる。未使用だった `engine_version` 入力は、指定すれば版が変わるという誤解を避けるため削除した。
 
 ---

@@ -58,6 +58,18 @@ variable "ebs_type" {
   default     = "gp3"
 }
 
+variable "data_volume_encrypted" {
+  description = "データ EBS(baseline / 全ブランチ / state.db)を暗号化する。既定 true(#341)。既存の非暗号化 volume を持つ環境は、移行するまで false にして prevent_destroy との衝突を避ける(docs/UPGRADING.md)"
+  type        = bool
+  default     = true
+}
+
+variable "kms_key_id" {
+  description = "データ EBS の暗号化に使う KMS key の ARN。空なら AWS 管理キー(aws/ebs)"
+  type        = string
+  default     = ""
+}
+
 variable "data_device_name" {
   description = "データ EBS のデバイス名(user-data の zpool 作成に渡す)"
   type        = string
