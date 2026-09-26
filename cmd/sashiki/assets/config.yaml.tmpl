@@ -77,7 +77,9 @@ branches:
 baseline:
   # refresh の実行方法(#101): refresh_script があればそれを実行。
   # 無ければ source_dir/*.sql を組み込みローダーが名前順に冪等適用する
-  # (適用記録は sashiki_meta._migrations。mysql エンジンのみ)
+  # (適用記録は sashiki_meta._migrations)。どちらも無いと `baseline refresh` は
+  # 選択肢を示して失敗する(#353)。app_pass を変えただけなら
+  # `sashiki baseline refresh --app-user-only`(#355)。
   # refresh_script: /etc/sashiki/refresh.sh
   # source_dir: /etc/sashiki/baseline-src
   # source_db: app            # 各 SQL 実行時に選択する DB(USE を書かない migration 向け)

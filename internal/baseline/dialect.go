@@ -14,6 +14,11 @@ type Dialect struct {
 	CountMigration func(name string) string
 	// InsertMigration は適用記録を書く SQL を返す。
 	InsertMigration func(name string) string
+	// ServerVersion はサーバの版を返す SQL(app ユーザーの認証プラグイン選択用)。
+	ServerVersion string
+	// AppUserSQL は app ユーザーを「無ければ作る / あればパスワード更新」する SQL(#355)。
+	// nil なら MySQL 用。
+	AppUserSQL func(user, pass, version string) string
 }
 
 // MySQLDialect は従来どおり sashiki_meta データベースに記録する。
@@ -28,6 +33,8 @@ func MySQLDialect() Dialect {
 		InsertMigration: func(name string) string {
 			return fmt.Sprintf("INSERT INTO `%s`._migrations (name) VALUES ('%s')", metaDB, name)
 		},
+		ServerVersion: "SELECT @@version",
+		AppUserSQL:    mysqlAppUserSQL,
 	}
 }
 
@@ -43,6 +50,8 @@ func PostgresDialect() Dialect {
 		InsertMigration: func(name string) string {
 			return fmt.Sprintf("INSERT INTO %s._migrations (name) VALUES ('%s')", metaDB, name)
 		},
+		ServerVersion: "SHOW server_version",
+		AppUserSQL:    postgresAppUserSQL,
 	}
 }
 

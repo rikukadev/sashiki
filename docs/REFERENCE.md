@@ -44,7 +44,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 |---|---|
 | `baseline import --from <src>` | 初回の baseline を作る。Linux(ZFS)は root で実行する(`sudo`)。macOS ネイティブは不要。`<src>` は SQL ファイル / ディレクトリ(`*.sql` を並列投入)/ `s3://…` / `-`(標準入力)。Postgres は `pg_dump` のカスタム形式・ディレクトリ形式も自動判定。`--db <name>` / `--import-cnf <my.cnf>` / `--threads N` / `--config <path>` |
 | `baseline list [--json]` | 登録済み snapshot と current |
-| `baseline refresh` | `refresh_script` か `source_dir` で作り直す(開始だけ返す) |
+| `baseline refresh [--app-user-only]` | `refresh_script` か `source_dir` で作り直す(開始だけ返す)。どちらも未設定なら選択肢を示して 412(#353)。`--app-user-only` はマイグレーションを当てず、base の app ユーザーを config の `app_pass` に同期して snapshot を取り直す(#355) |
 | `baseline build` / `validate <snap>` / `publish <snap>` / `delete <snap>` | 段階ごとに実行する |
 | `baseline promote <branch> [--masked] [--skip-validate]` | ブランチの現在の datadir を次の baseline に昇格する。`require_masked` なら `--masked` の宣言が要る |
 | `baseline set <snap>` | current を切り替える(ロールバック) |
@@ -117,7 +117,7 @@ allowlist ヘルパーで、手で使うものではない。config の `root_he
 | `POST /v1/branches/{name}/query` | 200 | **admin scope**。body `{sql}`。10 秒 / 200 行 / セル 64KB で打ち切り |
 | `GET /v1/baseline` | 200 | current / snapshot 一覧 / refresh 状態 |
 | `GET /v1/baselines` | 200 | 台帳(provenance 付き) |
-| `POST /v1/baseline/refresh` | 202 | **admin**。`{status, tag}` のみで `operation_id` は返さない |
+| `POST /v1/baseline/refresh` | 202 | **admin**。`{status, tag}` のみで `operation_id` は返さない。`?app_user_only=true` で app ユーザーの同期だけ。`refresh_script` / `source_dir` とも無ければ 412 |
 | `POST /v1/baseline/build` \| `/validate` | 202 | **admin** |
 | `POST /v1/baseline/publish` \| `/set` \| `/delete` \| `/promote` \| `/gc` | 200 | **admin**。promote は body `{branch, masked?, skip_validate?}` |
 | `GET /v1/capacity` \| `/v1/doctor` | 200 | |
@@ -215,4 +215,8 @@ close で delete(既に無ければ成功扱い)、それ以外のイベント�
 - サイズは `256M` / `256MB` / `20GiB` のいずれも可(2 進)。解釈できない値はエラー
 - watermark は 0〜1 の比率。`proxy.tls_cert` と `proxy.tls_key` は両方指定する
 - `SIGHUP` による再読み込みは無い。変更したら sashikid を再起動する
-- `app_pass` を変えたら baseline 側のユーザー/ロールのパスワードも変える
+- `app_pass` を変える手順(#355): config の `app_pass` を書き換え → `sudo systemctl restart sashikid` →
+  `sashiki baseline refresh --app-user-only`(base の app ユーザーを新しい値に揃えて新しい baseline を
+  取り、current を切り替える。`refresh_script` / `source_dir` は要らない)。既存ブランチは古いパスワードの
+  ままなので `sashiki recreate <name>` で新 baseline から作り直す(proxy は config の値で検証するため、
+  recreate するまでそのブランチには繋がらない)

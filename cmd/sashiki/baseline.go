@@ -182,7 +182,8 @@ func usageBaseline() int {
   sashiki baseline export --to <path|s3://...|-> [--snapshot <tag>]        baseline を zfs send で書き出す (#243)
   sashiki baseline import-stream --from <path|s3://...|-> [--force]        書き出した baseline を zfs recv して current にする (#243)
   sashiki baseline list [--json]                                snapshot 一覧 (sashikid 経由)
-  sashiki baseline refresh                                      refresh_script / source_dir で更新
+  sashiki baseline refresh [--app-user-only]                    refresh_script / source_dir で更新。
+                                                                 --app-user-only は app_pass の変更だけを baseline に反映
   sashiki baseline promote <branch> [--masked] [--skip-validate] migrate 済み branch を新 baseline に昇格 (#129)。
                                                                  require_masked なら --masked の宣言が要る (#296)
   sashiki baseline set|delete <snapshot> / build / validate / publish / gc
@@ -774,9 +775,10 @@ func mysqlClientBin(mysqldBin, name string) string {
 // MySQL の文字列リテラルとしてエスケープする(引用符や \ を含む --app-pass で
 // 壊れない、#310 review)。plugin は authPluginFor が返す固定候補なのでそのまま。
 func createAppUserSQL(userName, plugin, pass string) string {
+	// ダンプに同名ユーザーが入っていても config の app_pass に揃える(#355)。
 	return fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH %s BY %s; GRANT ALL PRIVILEGES ON *.* TO %s@'%%'; FLUSH PRIVILEGES;",
-		mysqlLiteral(userName), plugin, mysqlLiteral(pass), mysqlLiteral(userName))
+		"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH %s BY %s; ALTER USER %s@'%%' IDENTIFIED WITH %s BY %s; GRANT ALL PRIVILEGES ON *.* TO %s@'%%'; FLUSH PRIVILEGES;",
+		mysqlLiteral(userName), plugin, mysqlLiteral(pass), mysqlLiteral(userName), plugin, mysqlLiteral(pass), mysqlLiteral(userName))
 }
 
 // mysqlLiteral は s を MySQL の単一引用符リテラルにする。
@@ -940,10 +942,15 @@ func cmdBaselineGC(args []string) int {
 }
 
 func cmdBaselineRefresh(args []string) int {
-	if pos, err := parseNoFlags(args); err != nil || len(pos) > 0 {
+	pos, opts, err := parseArgs(args, nil, []string{"--app-user-only"})
+	if err != nil || len(pos) > 0 {
 		return usageBaseline()
 	}
-	code, data, err := call("POST", "/v1/baseline/refresh", nil)
+	path := "/v1/baseline/refresh"
+	if opts["--app-user-only"] == "true" {
+		path += "?app_user_only=true"
+	}
+	code, data, err := call("POST", path, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
