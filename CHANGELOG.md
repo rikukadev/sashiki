@@ -7,6 +7,14 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.13.0](https://github.com/rikukadev/sashiki/compare/v0.12.1...v0.13.0) (2026-09-27)
+
+
+### Features
+
+* **baseline:** refresh が app ユーザーを config の app_pass に同期し、--app-user-only とわかるエラーを足す ([#360](https://github.com/rikukadev/sashiki/issues/360)) ([7e4ed87](https://github.com/rikukadev/sashiki/commit/7e4ed87282f99e541b2eac7cbb243ea61b967ba9)), closes [#355](https://github.com/rikukadev/sashiki/issues/355) [#353](https://github.com/rikukadev/sashiki/issues/353)
+* **config:** app_pass を config に平文で置かずに渡せるようにする ([#362](https://github.com/rikukadev/sashiki/issues/362)) ([bac650b](https://github.com/rikukadev/sashiki/commit/bac650b376646eb1e99b2670b7f1f431a2a2df5b)), closes [#354](https://github.com/rikukadev/sashiki/issues/354)
+
 ## [0.12.1](https://github.com/rikukadev/sashiki/compare/v0.12.0...v0.12.1) (2026-09-26)
 
 
