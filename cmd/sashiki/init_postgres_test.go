@@ -23,8 +23,15 @@ func TestRenderPostgresConfig(t *testing.T) {
 		t.Errorf("engine.type = %v, want postgres", eng["type"])
 	}
 	pg, _ := eng["postgres"].(map[string]any)
-	if pg["app_user"] != "dev" || pg["app_pass"] != "dev" {
-		t.Errorf("app credential = %v/%v, want dev/dev", pg["app_user"], pg["app_pass"])
+	if pg["app_user"] != "dev" {
+		t.Errorf("app_user = %v, want dev", pg["app_user"])
+	}
+	// パスワードは config に入れず、置き場所だけを書く(#354)
+	if _, ok := pg["app_pass"]; ok {
+		t.Errorf("config に app_pass が入っている: %v", pg["app_pass"])
+	}
+	if pg["app_pass_file"] != appPassFilePath {
+		t.Errorf("app_pass_file = %v, want %s", pg["app_pass_file"], appPassFilePath)
 	}
 	if bd, _ := pg["bin_dir"].(string); !strings.HasPrefix(bd, "/usr/lib/postgresql/") {
 		t.Errorf("bin_dir = %q, want /usr/lib/postgresql/<ver>/bin", bd)

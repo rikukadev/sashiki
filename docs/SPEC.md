@@ -892,7 +892,7 @@ DNS は「VPC 内から解決できて sashiki ホストに向く」なら何で
 
 sashiki がクライアント認証(`dev@pr-123` のパスワード検証)を**終端**し、バックエンドへは sashiki が保持する credential で接続する。
 
-- `app_user` / `app_pass`(`engine.mysql.app_pass`。Linux の init はランダム生成、Terraform は Secrets Manager 由来)でクライアントを**サーバー側検証**する。合成ハンドシェイクは `caching_sha2_password` を名乗り fast-auth スクランブルを検証、`mysql_native_password` のクライアントは AuthSwitch でフォールバック(ADR-008)
+- `app_user` / `app_pass`(`engine.mysql.app_pass`。Linux の init はランダム生成して `app_pass_file` に置き、config には値を入れない。Terraform は Secrets Manager の値を同じファイルへ書く。`app_pass_ssm` / `app_pass_env` / `app_pass_file` / 平文の 4 通りで渡せ、優先順位はこの順、#354)でクライアントを**サーバー側検証**する。合成ハンドシェイクは `caching_sha2_password` を名乗り fast-auth スクランブルを検証、`mysql_native_password` のクライアントは AuthSwitch でフォールバック(ADR-008)
 - **認証に成功してから route / lazy create**: 認証前の無償リソース確保(#7 の DoS)を構造的に解消
 - backend へは sashiki がクライアントとして接続し直す(caching_sha2 の full-auth は localhost 上で RSA 公開鍵手順。認証はクライアントから不可視)
 - TLS 終端は sashiki に一元化。`proxy.tls_cert` / `proxy.tls_key` 指定時に有効(クライアント↔sashiki=TLS、sashiki↔backend=localhost 平文)。SSLRequest を検出して TLS へ切替

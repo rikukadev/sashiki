@@ -109,10 +109,15 @@ func initStepsPostgres(opts initOpts) []initStep {
 			},
 		},
 		initStep{
+			name: "/etc/sashiki/app_pass 生成(config には書かない)",
+			done: func() bool { _, err := os.Stat(appPassFilePath); return err == nil },
+			run:  func() error { return writeAppPassFile(appPassFilePath, opts.appPass) },
+		},
+		initStep{
 			name: "/etc/sashiki/config.yaml 生成 (engine: postgres)",
 			done: func() bool { _, err := os.Stat("/etc/sashiki/config.yaml"); return err == nil },
 			run: func() error {
-				cfg, err := renderPostgresConfigApp(opts.pool, opts.appPass)
+				cfg, err := renderPostgresConfigApp(opts.pool, appPassFilePath)
 				if err != nil {
 					return err
 				}
@@ -127,11 +132,11 @@ func initStepsPostgres(opts initOpts) []initStep {
 // renderPostgresConfig は postgres 用 config を生成する。bin_dir は実際に
 // インストールされている版から解決する(バージョンをハードコードしない)。
 func renderPostgresConfig(pool string) ([]byte, error) {
-	return renderPostgresConfigApp(pool, "dev")
+	return renderPostgresConfigApp(pool, appPassFilePath)
 }
 
-// renderPostgresConfigApp は app_pass を指定して postgres 用 config を生成する(#297)。
-func renderPostgresConfigApp(pool, appPass string) ([]byte, error) {
+// renderPostgresConfigApp は app_pass の置き場所を指して config を生成する(#297/#354)。
+func renderPostgresConfigApp(pool, appPassFile string) ([]byte, error) {
 	t, err := template.New("config").Parse(configPostgresTmpl)
 	if err != nil {
 		return nil, err
@@ -143,10 +148,10 @@ func renderPostgresConfigApp(pool, appPass string) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, struct {
-		Pool     string
-		PgBinDir string
-		AppPass  string
-	}{Pool: pool, PgBinDir: binDir, AppPass: yamlQuote(appPass)}); err != nil {
+		Pool        string
+		PgBinDir    string
+		AppPassFile string
+	}{Pool: pool, PgBinDir: binDir, AppPassFile: appPassFile}); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

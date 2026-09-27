@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,19 +55,37 @@ func TestDefaultConfigPathEnvOverride(t *testing.T) {
 }
 
 // --app-pass に YAML を壊す文字が入っても、読み戻した値が一致する(#310 review)。
+// 生成される config は **パスワードを含まず**、置き場所を指すだけ(#354)。
+// 値はファイルから読み、引用符やバックスラッシュを含んでいても壊れない。
 func TestRenderConfigQuotesAppPass(t *testing.T) {
 	for _, pass := range []string{`foo: bar`, `foo # bar`, `say "hi"`, `back\slash`, "plain"} {
-		data, err := renderConfigApp("pool", pass)
+		dir := t.TempDir()
+		passFile := filepath.Join(dir, "app_pass")
+		if err := os.WriteFile(passFile, []byte(pass+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		data, err := renderConfigApp("pool", passFile)
 		if err != nil {
 			t.Fatal(err)
 		}
-		f := filepath.Join(t.TempDir(), "c.yaml")
+		// config に平文が載らないことが目的。ここが崩れたら意味が無い
+		if strings.Contains(string(data), pass) {
+			t.Errorf("config に app_pass の平文が入っている: %q", pass)
+		}
+		f := filepath.Join(dir, "c.yaml")
 		if err := os.WriteFile(f, data, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		cfg, err := config.Load(f)
 		if err != nil {
-			t.Fatalf("config with app_pass %q must stay loadable: %v", pass, err)
+			t.Fatalf("config with app_pass_file %q must stay loadable: %v", passFile, err)
+		}
+		// Load だけでは値が入らない。ResolveAppPass を通して初めて取れる
+		if got := cfg.AppPass(); got == pass {
+			t.Errorf("Load だけで平文が入っている(解決前に値を持つべきでない)")
+		}
+		if err := cfg.ResolveAppPass(context.Background()); err != nil {
+			t.Fatalf("ResolveAppPass: %v", err)
 		}
 		if got := cfg.AppPass(); got != pass {
 			t.Errorf("app_pass round-trip: got %q, want %q", got, pass)
