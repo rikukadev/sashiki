@@ -74,7 +74,11 @@ type Config struct {
 	PgBinDir      string
 	PgRunUser     string
 	MysqlExtraCnf string
-	StateDir      string // hook 用の作業ディレクトリの親(/var/lib/sashiki/branches)
+	// AppUser / AppPass は baseline refresh(source loader)で base の app ユーザーを
+	// config に同期するのに使う(#355)。空なら同期しない。
+	AppUser  string
+	AppPass  string
+	StateDir string // hook 用の作業ディレクトリの親(/var/lib/sashiki/branches)
 
 	// LazyCreate: プロキシに未知のブランチ名で接続が来たとき自動作成する。
 	// バックエンドの TypicalCreate が LazyMaxWait を超える場合は無効(仕様 15-3)。

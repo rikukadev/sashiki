@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -362,5 +363,41 @@ func TestRefreshDoesNotTrustStaleSentinel(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
 		t.Error("build should remove the sentinel before running")
+	}
+}
+
+// refresh_script も source_dir も無いときは、選択肢を示して落ちる(#353)。
+func TestRefreshWithoutScriptOrSourceDirExplainsOptions(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	_, err := m.RefreshBaseline(context.Background(), RefreshConfig{
+		Script: filepath.Join(t.TempDir(), "missing.sh"), CheckQuiesced: quiesceOK, SkipValidate: true,
+	})
+	if err == nil {
+		t.Fatal("refresh without script / source_dir should fail")
+	}
+	for _, want := range []string{"source_dir", "refresh_script", "--app-user-only", "baseline import"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q: %v", want, err)
+		}
+	}
+	if !errors.Is(err, ErrPreconditionFailed) {
+		t.Errorf("should be a precondition error (412), got %v", err)
+	}
+}
+
+// --app-user-only は script が無くてもローダー経路で動く(#355)。
+func TestRefreshAppUserOnlySkipsScript(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	called := false
+	if _, err := m.RefreshBaseline(context.Background(), RefreshConfig{
+		Script: filepath.Join(t.TempDir(), "missing.sh"), CheckQuiesced: quiesceOK, SkipValidate: true,
+		AppUserOnly: true,
+		RunSource:   func(context.Context) error { called = true; return nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitRefreshDone(t)
+	if !called {
+		t.Error("app-user-only refresh should run the loader path")
 	}
 }

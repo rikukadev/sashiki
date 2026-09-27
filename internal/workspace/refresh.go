@@ -40,6 +40,10 @@ type RefreshConfig struct {
 	SourceDB  string // ローダーが各ファイル実行時に選択する DB(空 = 未選択)
 	// RunSource はテスト注入用(非 nil ならローダーの代わりに呼ばれる)。
 	RunSource func(ctx context.Context) error
+	// AppUserOnly はマイグレーションを適用せず、base の app ユーザーを config の
+	// app_pass に同期して snapshot だけ取り直す(`baseline refresh --app-user-only`、#355)。
+	// refresh_script / source_dir が無くても動く。
+	AppUserOnly bool
 
 	useLoader bool // 内部: SourceDir モードで実行するか
 	// CheckQuiesced は snapshot 取得前の検証(テストで注入)。nil なら
@@ -108,11 +112,14 @@ func (m *Manager) resolveRefreshConfig(rc RefreshConfig) RefreshConfig {
 	}
 	// SourceDir モード判定: script が無く source_dir があれば組み込みローダー(#101)。
 	// 実在チェック(script も source_dir も無い)は呼び出し側で行う。
-	rc.useLoader = rc.RunSource != nil
+	rc.useLoader = rc.RunSource != nil || rc.AppUserOnly
 	if !rc.useLoader && rc.SourceDir != "" {
 		if _, err := os.Stat(rc.Script); err != nil {
 			rc.useLoader = true
 		}
+	}
+	if rc.AppUserOnly {
+		rc.SourceDir = "" // 同期だけ
 	}
 	if rc.CheckQuiesced == nil {
 		rc.CheckQuiesced = m.defaultQuiesceCheck
@@ -140,6 +147,15 @@ func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag st
 	rc = m.resolveRefreshConfig(rc)
 	if !rc.useLoader { // source loader モードでは script は不要(#101)
 		if _, err := os.Stat(rc.Script); err != nil {
+			if rc.SourceDir == "" {
+				// どちらも未設定(init の config は両方コメントアウト)。「script が無い」だけ
+				// では何をすればよいか分からないので選択肢を示す(#353)。
+				return "", fmt.Errorf("%w: baseline refresh には次のどれかが要る: "+
+					"(a) baseline.source_dir に SQL を置く(組み込みローダーが名前順に冪等適用)、"+
+					"(b) baseline.refresh_script(既定 %s)を置く、"+
+					"(c) app_pass を変えただけなら `sashiki baseline refresh --app-user-only`。"+
+					"初回の投入は `sashiki baseline import --from <dump>`", ErrPreconditionFailed, rc.Script)
+			}
 			return "", fmt.Errorf("refresh script %s: %w", rc.Script, err)
 		}
 	}
@@ -490,9 +506,15 @@ func (m *Manager) runSourceLoader(ctx context.Context, rc RefreshConfig) error {
 			srv.UID, srv.GID = uid, gid
 		}
 	}
-	applied, err := baseline.ApplyDir(ctx, srv, ops, rc.SourceDir, rc.SourceDB)
+	// マイグレーション適用と同じ一時起動で app ユーザーを config の app_pass に同期する
+	// (#355: 以前は CREATE USER IF NOT EXISTS だけで、app_pass を変えても baseline の
+	// ユーザーが古いままだった)。
+	applied, err := baseline.ApplyDirSync(ctx, srv, ops, rc.SourceDir, rc.SourceDB, m.cfg.AppUser, m.cfg.AppPass)
 	if err != nil {
 		return err
+	}
+	if m.cfg.AppUser != "" && m.cfg.AppPass != "" {
+		oplog.Logf(ctx, "baseline refresh: app user %s synced to config", m.cfg.AppUser)
 	}
 	oplog.Logf(ctx, "baseline refresh: source loader applied %d file(s): %v", len(applied), applied)
 	return nil

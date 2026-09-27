@@ -227,69 +227,55 @@ const metaDB = "sashiki_meta"
 // (@baseline snapshot は正常終了状態でのみ取得する、の「正常終了」部分)。
 // 適用対象が 1 件も無い場合は mysqld を起動せずに成功する。
 func ApplyDir(ctx context.Context, s Server, ops Ops, dir, db string) ([]string, error) {
+	return applyAndSync(ctx, s, ops, dir, db, "", "")
+}
+
+// migrationFiles は dir の *.sql を名前順に返す(dir が空なら無し)。
+func migrationFiles(dir string) ([]string, error) {
+	if dir == "" {
+		return nil, nil
+	}
 	files, err := filepath.Glob(filepath.Join(dir, "*.sql"))
 	if err != nil {
 		return nil, err
 	}
 	sort.Strings(files)
-	if len(files) == 0 {
-		return nil, nil
-	}
 	for _, f := range files {
 		if !migNameRe.MatchString(filepath.Base(f)) {
 			return nil, fmt.Errorf("マイグレーション名に使えない文字が含まれています: %s", filepath.Base(f))
 		}
 	}
+	return files, nil
+}
 
-	// 方言未設定(手組み Ops / 既存テスト)は従来どおり MySQL 方言とみなす。
-	dia := ops.Dialect
-	if dia.zero() {
-		dia = MySQLDialect()
-	}
-
-	if err := ops.Start(ctx, s); err != nil {
-		return nil, fmt.Errorf("start: %w", err)
-	}
-	shutdown := func() error {
-		if err := ops.Shutdown(ctx, s); err != nil {
-			return err
-		}
-		return ops.WaitGone(ctx, s, 60*time.Second)
-	}
-	fail := func(cause error) ([]string, error) {
-		_ = shutdown() // 失敗時も必ず正常終了を試みる(snapshot はどのみち取得されない)
-		return nil, cause
-	}
-
-	if err := ops.WaitReady(ctx, s, 60*time.Second); err != nil {
-		return fail(err)
+// applyMigrations は起動済みの base に未適用のファイルを順に適用する(適用記録付き)。
+func applyMigrations(ctx context.Context, s Server, ops Ops, dia Dialect, files []string, db string) ([]string, error) {
+	if len(files) == 0 {
+		return nil, nil
 	}
 	if _, err := ops.Query(ctx, s, dia.CreateMeta); err != nil {
-		return fail(err)
+		return nil, err
 	}
 	if _, err := ops.Query(ctx, s, dia.CreateMigrations); err != nil {
-		return fail(err)
+		return nil, err
 	}
 	var applied []string
 	for _, f := range files {
 		name := filepath.Base(f)
 		got, err := ops.Query(ctx, s, dia.CountMigration(name))
 		if err != nil {
-			return fail(err)
+			return nil, err
 		}
 		if got == "1" {
 			continue
 		}
 		if err := ops.ApplyFile(ctx, s, db, f); err != nil {
-			return fail(fmt.Errorf("apply %s: %w", name, err))
+			return nil, fmt.Errorf("apply %s: %w", name, err)
 		}
 		if _, err := ops.Query(ctx, s, dia.InsertMigration(name)); err != nil {
-			return fail(err)
+			return nil, err
 		}
 		applied = append(applied, name)
-	}
-	if err := shutdown(); err != nil {
-		return applied, fmt.Errorf("graceful shutdown: %w", err)
 	}
 	return applied, nil
 }

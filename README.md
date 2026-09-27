@@ -122,8 +122,9 @@ mysql -udev@pr-1 -p -h 127.0.0.1 -P3306   # :3306 固定エンドポイント経
 
 パスワードは `init` がランダム生成して表示したもの(`/etc/sashiki/config.yaml` の `app_pass`)。
 固定したいときは**手順 2 の `init` に `--app-pass <値>` を付ける**(config があると `init` は
-生成ステップを飛ばすので後から付けても効かない。後から変えるなら config の `app_pass` と
-baseline 内のユーザーのパスワードを両方変える)。macOS ネイティブとコンテナは開発用途なので
+生成ステップを飛ばすので後から付けても効かない。後から変えるなら config の `app_pass` を書き換えて
+sashikid を再起動し、`sashiki baseline refresh --app-user-only` で baseline 側のユーザーも揃える。
+[REFERENCE](docs/REFERENCE.md#config))。macOS ネイティブとコンテナは開発用途なので
 既定 `dev`(`init --app-pass` で変更可)。
 
 ### macOS ネイティブ(VM 無し)
