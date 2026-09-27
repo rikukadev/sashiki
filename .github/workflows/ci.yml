@@ -30,10 +30,14 @@ jobs:
         run: |
           set -euo pipefail
           npm i --no-save --no-audit --no-fund @conventional-commits/parser
-          gh pr view "$PR" --repo "$GITHUB_REPOSITORY" \
-            --json commits --jq '[.commits[].messageBody // "" ] as $b
-              | [.commits[].messageHeadline] as $h
-              | [range(0; $h|length) | $h[.] + (if $b[.] == "" then "" else "\n\n" + $b[.] end)]' \
+          # **マージコミットは除く。** squash の本文には入らないので changelog に
+          # 影響せず、"Merge branch 'main' into ..." は当然パーサを通らない。
+          # 親が 2 つ以上あるかで判定する(subject の文字列で当てるより確実)。
+          # --paginate は --jq と併用すると **ページごとに別の JSON** を出して
+          # しまうので、--slurp で 1 つにまとめてから外部 jq に渡す
+          # (--slurp と --jq は同時に使えない)。
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" \
+            | jq '[.[][] | select((.parents|length) < 2) | .commit.message]' \
             > /tmp/commit-messages.json
           jq --arg t "$TITLE" '. + [$t]' /tmp/commit-messages.json > /tmp/msgs.json
           node ./.github/scripts/check-commit-parse.mjs /tmp/msgs.json
