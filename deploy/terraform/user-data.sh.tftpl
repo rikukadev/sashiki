@@ -83,7 +83,24 @@ CONFIG=/etc/sashiki/config.yaml
 if [ -f "$CONFIG" ]; then
   # init は app_user / app_pass を生成する(旧名 proxy_user / proxy_pass も許容)。
   sed -i -E "s/^( *)(app_user|proxy_user):.*/\1app_user: ${proxy_user}/" "$CONFIG"
-  sed -i -E "s#^( *)(app_pass|proxy_pass):.*#\1app_pass: $DEV_PASSWORD#" "$CONFIG"
+
+  # パスワードは **config ではなく app_pass_file に書く**(#354)。init が
+  # app_pass_file を指す config を生成するので、値だけ差し替える。
+  #
+  # config に sed で埋める旧方式に戻してはいけない。config を 1 回参照した
+  # だけで平文が SSM のコマンド履歴に残り、削除 API が無いためローテーション
+  # しか手が無くなる(実際に踏んだ)。
+  PASS_FILE="$(sed -nE 's/^ *app_pass_file: *(.+)$/\1/p' "$CONFIG" | head -1)"
+  if [ -n "$PASS_FILE" ]; then
+    printf '%s\n' "$DEV_PASSWORD" > "$PASS_FILE"
+    chown root:sashiki "$PASS_FILE" 2>/dev/null || true
+    chmod 640 "$PASS_FILE"
+  elif grep -qE '^ *(app_pass|proxy_pass):' "$CONFIG"; then
+    # 旧版の sashiki(app_pass_file を知らない)向けの後方互換。
+    sed -i -E "s#^( *)(app_pass|proxy_pass):.*#\1app_pass: $DEV_PASSWORD#" "$CONFIG"
+  else
+    echo "sashiki: 警告 app_pass の置き場所が config から読めない。dev ユーザーの認証が通らない" >&2
+  fi
   # init の既定は loopback(127.0.0.1:8080)。それだと SG で 8080 を開けても
   # 出力の api_url に届かない(#286)。allowed_sg_ids からの Bearer 認証経路を
   # 成立させるため全 IF で listen する。loopback 無認証の判定は接続元アドレスで

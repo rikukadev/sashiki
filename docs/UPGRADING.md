@@ -6,6 +6,45 @@
 
 v0.x の間は API / config が固定されていないので、マイナー版で挙動が変わることがある。
 
+## 0.12.x → 0.13.0
+
+### init が app_pass を config に書かなくなる(#354)
+
+`sashiki init`(Linux)は `app_pass_file: /etc/sashiki/app_pass` を書き、パスワードは
+そのファイル(root:sashiki 0640)に入れる。**config.yaml には値が入らない。**
+
+`app_pass` は proxy のクライアント認証そのもので、API トークンと重みが変わらない。
+config に平文で載っていると、設定ファイルのコピーがそのまま漏洩経路になる
+(config を SSM Run Command で参照しただけで、削除 API の無いコマンド履歴に平文が残った)。
+
+**既存ホストはそのまま動く。** `app_pass` の平文を読む経路は残してあり、
+移行は任意。移すなら:
+
+```bash
+sudo sh -c 'umask 077; sed -nE "s/^ *(app_pass|proxy_pass): *(.+)$/\2/p" /etc/sashiki/config.yaml \
+  | head -1 > /etc/sashiki/app_pass'
+sudo chown root:sashiki /etc/sashiki/app_pass && sudo chmod 640 /etc/sashiki/app_pass
+# config の app_pass 行を app_pass_file に差し替える
+sudo sed -i -E 's#^( *)(app_pass|proxy_pass):.*#\1app_pass_file: /etc/sashiki/app_pass#' /etc/sashiki/config.yaml
+sudo systemctl restart sashikid
+```
+
+値は変えないので baseline 側のユーザーを触る必要はない。
+
+SSM や環境変数から渡すこともできる。優先順位は `app_pass_ssm` > `app_pass_env` >
+`app_pass_file` > 平文。詳細は [docs/REFERENCE.md](REFERENCE.md)。
+
+**参照先が空なら平文へは落ちない。** 壊れた参照のまま既定値で起動すると、
+間違ったパスワードで上がって原因が分からなくなるため、起動を止める。
+
+### Terraform は同じファイルへ書く
+
+module は Secrets Manager の値を config ではなく `app_pass_file` の指す先へ書く。
+`sashiki_ref` を上げるだけでよく、変数の変更は無い。
+
+**module だけ新しく sashiki のバイナリが古い**組み合わせでも動くように、
+`app_pass_file` が config に無ければ従来どおり config を書き換える経路も残してある。
+
 ## 0.12.0 → 0.12.x
 
 ### Terraform: データ EBS が既定で暗号化される(#341)

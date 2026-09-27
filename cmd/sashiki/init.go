@@ -187,10 +187,13 @@ init 完了。次のステップ:
 `, dump)
 	if generatedPass && !configExisted {
 		fmt.Printf(`
-app パスワード(接続ユーザー dev の -p に使う。/etc/sashiki/config.yaml の app_pass):
+app パスワード(接続ユーザー dev の -p に使う):
   %s
-固定したいときは init の前に sashiki init --app-pass <値> で指定する(既存 config は書き換えない)。
-`, opts.appPass)
+値は %s(0640)にあり、**config.yaml には入っていない**。config を貼っても
+秘密が付いてこないようにするため(#354)。SSM や環境変数から渡したいときは
+config の app_pass_ssm / app_pass_env を使う。
+固定したいときは init の前に sashiki init --app-pass <値> で指定する(既存の値は書き換えない)。
+`, opts.appPass, appPassFilePath)
 	}
 	return exitOK
 }
@@ -292,10 +295,15 @@ func initSteps(opts initOpts) []initStep {
 			},
 		},
 		initStep{
+			name: "/etc/sashiki/app_pass 生成(config には書かない)",
+			done: func() bool { _, err := os.Stat(appPassFilePath); return err == nil },
+			run:  func() error { return writeAppPassFile(appPassFilePath, opts.appPass) },
+		},
+		initStep{
 			name: "/etc/sashiki/config.yaml 生成",
 			done: func() bool { _, err := os.Stat("/etc/sashiki/config.yaml"); return err == nil },
 			run: func() error {
-				cfg, err := renderConfigApp(opts.pool, opts.appPass)
+				cfg, err := renderConfigApp(opts.pool, appPassFilePath)
 				if err != nil {
 					return err
 				}
@@ -401,20 +409,41 @@ func existingPoolFromConfig(path string) string {
 }
 
 func renderConfig(pool string) ([]byte, error) {
-	return renderConfigApp(pool, "dev")
+	return renderConfigApp(pool, appPassFilePath)
 }
 
-// renderConfigApp は app_pass を指定して config を生成する(#297)。
-func renderConfigApp(pool, appPass string) ([]byte, error) {
+// appPassFilePath は app_pass の値を置くファイル(#354)。config には
+// このパスだけを書き、値は入れない。sashikid(User=sashiki)と root の
+// baseline import の両方が読むので root:sashiki 0640 にする。
+const appPassFilePath = "/etc/sashiki/app_pass"
+
+// writeAppPassFile は app_pass の値をファイルに書く(#354)。
+// **既にあれば上書きしない** — init の再実行でパスワードが変わると、
+// baseline に作った app ユーザーと食い違って認証が通らなくなる。
+func writeAppPassFile(path, pass string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	if err := os.WriteFile(path, []byte(pass+"\n"), 0o600); err != nil {
+		return err
+	}
+	// sashikid は User=sashiki で動くので読めるようにする。config と同じ扱い
+	// (sashiki グループが無ければ 0600 のまま)。値の入ったファイルを
+	// world-readable にはしない
+	return fixConfigPerm(path)
+}
+
+// renderConfigApp は app_pass の置き場所を指して config を生成する(#297/#354)。
+func renderConfigApp(pool, appPassFile string) ([]byte, error) {
 	t, err := template.New("config").Parse(configTmpl)
 	if err != nil {
 		return nil, err
 	}
 	var buf bytes.Buffer
 	if err := t.Execute(&buf, struct {
-		Pool    string
-		AppPass string
-	}{Pool: pool, AppPass: yamlQuote(appPass)}); err != nil {
+		Pool        string
+		AppPassFile string
+	}{Pool: pool, AppPassFile: appPassFile}); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

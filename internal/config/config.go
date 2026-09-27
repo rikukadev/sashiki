@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,27 +13,29 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/rikukadev/sashiki/internal/secretref"
 )
 
 // Config は sashikid 全体の設定。
 type Config struct {
-	Listen    Listen   `yaml:"listen"`
-	Domain    string   `yaml:"domain"`
-	StateDB   string   `yaml:"state_db"`
-	RunDir    string   `yaml:"run_dir"`    // 実行時の一時領域(socket / sentinel)。既定 /run/sashiki(仕様 21章)
-	LogDir    string   `yaml:"log_dir"`    // ログ出力の基点。既定 /var/log/sashiki(仕様 21章)
-	LogFormat string   `yaml:"log_format"` // text | json(構造化ログ)
+	Listen    Listen `yaml:"listen"`
+	Domain    string `yaml:"domain"`
+	StateDB   string `yaml:"state_db"`
+	RunDir    string `yaml:"run_dir"`    // 実行時の一時領域(socket / sentinel)。既定 /run/sashiki(仕様 21章)
+	LogDir    string `yaml:"log_dir"`    // ログ出力の基点。既定 /var/log/sashiki(仕様 21章)
+	LogFormat string `yaml:"log_format"` // text | json(構造化ログ)
 	// RootHelper は sashiki-root-helper のパス(#276)。設定すると zfs / zpool / systemctl の
 	// root 操作を `sudo -n <helper> ...` 経由にし、helper が allowlist で検証する。
 	// 空なら従来どおり `sudo -n zfs ...`(sudoers のパターン行が要る)。
-	RootHelper string `yaml:"root_helper"`
-	Storage   Storage  `yaml:"storage"`
-	Engine    Engine   `yaml:"engine"`
-	Proxy     Proxy    `yaml:"proxy"`
-	Branches  Branches `yaml:"branches"`
-	Baseline  Baseline `yaml:"baseline"`
-	Hooks     Hooks    `yaml:"hooks"`
-	Auth      Auth     `yaml:"auth"`
+	RootHelper string   `yaml:"root_helper"`
+	Storage    Storage  `yaml:"storage"`
+	Engine     Engine   `yaml:"engine"`
+	Proxy      Proxy    `yaml:"proxy"`
+	Branches   Branches `yaml:"branches"`
+	Baseline   Baseline `yaml:"baseline"`
+	Hooks      Hooks    `yaml:"hooks"`
+	Auth       Auth     `yaml:"auth"`
 }
 
 // Listen は各リスナーのアドレス。
@@ -105,6 +108,11 @@ type PostgresEngine struct {
 	// `<app_user>@<branch>` のルーティングとパスワード検証に使う(#222/#223/#224)。
 	AppUser string `yaml:"app_user"`
 	AppPass string `yaml:"app_pass"`
+	// AppPassEnv / AppPassSSM は app_pass を平文で置かずに渡す口(#354)。
+	// api_token_env / api_token_ssm と同じ形。優先順位は ssm > env > リテラル。
+	AppPassEnv  string `yaml:"app_pass_env"`
+	AppPassSSM  string `yaml:"app_pass_ssm"`
+	AppPassFile string `yaml:"app_pass_file"`
 	// Mode は起動方式。"systemd"(既定)か "process"(systemd の無い環境で postgres を
 	// 直接 spawn、#227)。
 	Mode string `yaml:"mode"`
@@ -135,8 +143,13 @@ type MysqlEngine struct {
 	AppPass   string `yaml:"app_pass"`
 	ProxyUser string `yaml:"proxy_user"`
 	ProxyPass string `yaml:"proxy_pass"`
-	EnvDir    string `yaml:"env_dir"`
-	Sudo      bool   `yaml:"sudo"`
+	// AppPassEnv / AppPassSSM は app_pass を平文で置かずに渡す口(#354)。
+	// api_token_env / api_token_ssm と同じ形。優先順位は ssm > env > リテラル。
+	AppPassEnv  string `yaml:"app_pass_env"`
+	AppPassSSM  string `yaml:"app_pass_ssm"`
+	AppPassFile string `yaml:"app_pass_file"`
+	EnvDir      string `yaml:"env_dir"`
+	Sudo        bool   `yaml:"sudo"`
 	// Mode は起動方式。"systemd"(既定)か "process"(systemd の無い macOS ネイティブ /
 	// コンテナで mysqld を直接 spawn、#113)。
 	Mode      string `yaml:"mode"`
@@ -456,11 +469,61 @@ func (c Config) AppUser() string {
 }
 
 // AppPass は AppUser のパスワードを返す。
+//
+// **値がここに入っているのは ResolveAppPass を通した後だけ**(#354)。
+// app_pass_ssm / app_pass_env で渡す構成では、Load 直後は空のことがある。
 func (c Config) AppPass() string {
 	if c.Engine.Type == "postgres" {
 		return c.Engine.Postgres.AppPass
 	}
 	return c.Engine.Mysql.ProxyPass
+}
+
+// AppPassRef は app_pass の在り処を返す(#354)。ssm > env > リテラル。
+func (c Config) AppPassRef() secretref.Ref {
+	if c.Engine.Type == "postgres" {
+		pg := c.Engine.Postgres
+		return secretref.Ref{SSM: pg.AppPassSSM, Env: pg.AppPassEnv, File: pg.AppPassFile, Literal: pg.AppPass}
+	}
+	my := c.Engine.Mysql
+	// リテラルは normalize で app_pass -> proxy_pass に写してある
+	return secretref.Ref{SSM: my.AppPassSSM, Env: my.AppPassEnv, File: my.AppPassFile, Literal: my.ProxyPass}
+}
+
+// AppPassEnvName は app_pass_env に指定された環境変数名を返す。未設定なら空。
+// hooks に渡す環境から落とすために使う(#354)。
+func (c Config) AppPassEnvName() string {
+	if c.Engine.Type == "postgres" {
+		return c.Engine.Postgres.AppPassEnv
+	}
+	return c.Engine.Mysql.AppPassEnv
+}
+
+// setAppPass は解決した値を in-memory に書き戻す。以降 AppPass() で取れる。
+func (c *Config) setAppPass(v string) {
+	if c.Engine.Type == "postgres" {
+		c.Engine.Postgres.AppPass = v
+		return
+	}
+	c.Engine.Mysql.AppPass = v
+	c.Engine.Mysql.ProxyPass = v
+}
+
+// ResolveAppPass は app_pass を解決して in-memory に置く(#354)。
+//
+// **ディスクには書かない。** 平文を config に残さないのが目的なので、
+// 解決結果はプロセスの寿命だけ持つ。SSM が指定されていなければ AWS を呼ばない。
+func (c *Config) ResolveAppPass(ctx context.Context) error {
+	ref := c.AppPassRef()
+	if ref.IsZero() {
+		return secretref.Unset("engine." + c.Engine.Type + ".app_pass")
+	}
+	v, err := ref.Resolve(ctx, "engine."+c.Engine.Type+".app_pass")
+	if err != nil {
+		return err
+	}
+	c.setAppPass(v)
+	return nil
 }
 
 // EngineMode は起動方式("systemd" か "process")を返す。未設定は "systemd"。

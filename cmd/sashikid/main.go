@@ -74,6 +74,16 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
+	// app_pass を解決する(#354)。app_pass_ssm / app_pass_env で渡す構成では
+	// ここまで値が入っていない。**解決結果はメモリだけに置き、config へは
+	// 書き戻さない** — 平文をディスクに残さないのが目的なので。
+	//
+	// 失敗したら起動しない。パスワード無しで上がると proxy がクライアント認証を
+	// 通せず、症状は「接続できない」だけになって原因が遠い。
+	if err := cfg.ResolveAppPass(context.Background()); err != nil {
+		log.Fatalf("config: %v", err)
+	}
+
 	// 構造化ログ(仕様 20-5)。json では既存の log.Printf も slog 経由で JSON になる
 	if cfg.LogFormat == "json" {
 		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
@@ -184,6 +194,11 @@ func main() {
 	// API トークンを hook に見せない(#295)。auth.api_token_env で名前を変えて
 	// いても落とす。
 	hr.StripEnv = append(hr.StripEnv, cfg.Auth.APITokenEnv)
+	// app_pass_env も落とす(#354)。API トークンだけ守っても、同じ重みの
+	// app credential が hook に素通りしていては意味がない
+	if name := cfg.AppPassEnvName(); name != "" {
+		hr.StripEnv = append(hr.StripEnv, name)
+	}
 
 	mgr, err := workspace.New(workspace.Config{
 		NamePattern:        cfg.Branches.NamePattern,

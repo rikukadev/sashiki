@@ -266,6 +266,12 @@ func cmdBaselineImport(args []string) int {
 		fmt.Fprintf(os.Stderr, "sashiki baseline import: config: %v\n", err)
 		return exitError
 	}
+	// import は app ユーザーを CREATE USER するのでパスワードが要る。
+	// app_pass_ssm / app_pass_env で渡す構成ではここで解決する(#354)
+	if err := cfg.ResolveAppPass(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "sashiki baseline import: %v\n", err)
+		return exitError
+	}
 	// root が要るのは zfs(systemd)経路だけ。apfs/reflink のローカル CoW は
 	// ログインユーザー(macOS ネイティブ)や root コンテナで動くので要求しない(#138)。
 	local := cfg.Storage.Backend == "apfs" || cfg.Storage.Backend == "reflink"

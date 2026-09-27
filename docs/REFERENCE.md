@@ -73,6 +73,27 @@ config と state.db を直接触る(sashikid 経由ではない)。
 エラーにする。引数の不足・不正(`--for` / `--prefix` の値無し、`--threads` の不正、`export` の `--to` 無し、
 `init --engine` の不正)も 2 で終了する。
 
+### app_pass の渡し方
+
+`app_pass` は proxy のクライアント認証そのもので、持っていれば `dev@<branch>` で全ブランチに入れる。
+API トークンと重みが変わらないので、**config に平文で置かない口を 3 つ用意してある**(#354)。
+優先順位は上から。
+
+| キー | 中身 | 使いどころ |
+|---|---|---|
+| `app_pass_ssm` | SSM Parameter Store のパラメータ名(SecureString) | 値をホストのディスクに残したくない |
+| `app_pass_env` | 環境変数の**名前**。値ではない | systemd の `EnvironmentFile`(0600)から渡す |
+| `app_pass_file` | 値が入ったファイルのパス。**Linux の init の既定** | systemd の外(`baseline import`)からも読む必要がある |
+| `app_pass` | 平文。後方互換 | 既存 config はそのまま動く |
+
+`sashiki init`(Linux)は `app_pass_file: /etc/sashiki/app_pass` を書き、値はそのファイル
+(root:sashiki 0640)に入れる。**config.yaml には値が入らない**ので、設定を貼っても秘密が付いてこない。
+
+**参照先が空なら平文へは落ちない。** 明示した参照が壊れているときに既定値で起動すると、
+間違ったパスワードのまま上がって原因が分からなくなる。4 つとも未設定なら選択肢を並べて落ちる。
+
+`app_pass_env` に指定した名前は hook に渡す環境から除かれる(`api_token_env` と同じ扱い)。
+
 `app_pass` は非 ASCII でもよい。MySQL / PostgreSQL の proxy はどちらも UTF-8 のバイト列で検証し、
 PostgreSQL(SCRAM-SHA-256)は RFC 4013 の SASLprep で正規化してから鍵を導出する(PostgreSQL 本体と同じ。
 正規化に失敗する入力は元の文字列のまま)。
