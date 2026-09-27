@@ -5,6 +5,39 @@ on:
   pull_request:
 
 jobs:
+  # コミットメッセージが release-please のパーサを通ることを確かめる。
+  # 通らないと **そのコミットが changelog から静かに消える**。エラーは出ず、
+  # release-please のログに "commit could not be parsed" が 1 行出るだけ。
+  #
+  # 実際に f9c06d5(#356 = #339 のコマンド注入の修正)が落ち、リリースノートに
+  # 載らないまま出荷されかけた。原因は閉じ括弧の行またぎ。日本語を 70 字前後で
+  # 折り返すと丸括弧が行をまたぎ、PEG パーサが落ちる。
+  #
+  # squash の本文は PR の各コミットメッセージを連ねたものなので、コミット単位で
+  # 通れば squash 後も通る。PR タイトルも squash の subject になるので一緒に見る。
+  commit-parse:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ github.event.pull_request.title }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          npm i --no-save --no-audit --no-fund @conventional-commits/parser
+          gh pr view "$PR" --repo "$GITHUB_REPOSITORY" \
+            --json commits --jq '[.commits[].messageBody // "" ] as $b
+              | [.commits[].messageHeadline] as $h
+              | [range(0; $h|length) | $h[.] + (if $b[.] == "" then "" else "\n\n" + $b[.] end)]' \
+            > /tmp/commit-messages.json
+          jq --arg t "$TITLE" '. + [$t]' /tmp/commit-messages.json > /tmp/msgs.json
+          node ./.github/scripts/check-commit-parse.mjs /tmp/msgs.json
+
   test:
     runs-on: ubuntu-latest
     steps:

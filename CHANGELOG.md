@@ -7,6 +7,14 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.12.1](https://github.com/rikukadev/sashiki/compare/v0.12.0...v0.12.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **action:** SSM transport のコマンド注入を防ぐ ([#356](https://github.com/rikukadev/sashiki/issues/356)) ([f9c06d5](https://github.com/rikukadev/sashiki/commit/f9c06d584683d02e1dfae623a5fc5e56952fd865)), closes [#339](https://github.com/rikukadev/sashiki/issues/339)
+* **terraform:** API トークンを branches scope に、データ EBS を暗号化し、github_token 経路を削除する ([#358](https://github.com/rikukadev/sashiki/issues/358)) ([8f58e14](https://github.com/rikukadev/sashiki/commit/8f58e14553ef14b38148d830336ca6f55fbf6dd2))
+
 ## [0.12.0](https://github.com/rikukadev/sashiki/compare/v0.11.2...v0.12.0) (2026-09-24)
 
 
