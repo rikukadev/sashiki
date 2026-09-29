@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/rikukadev/sashiki/internal/baseline"
+	"github.com/rikukadev/sashiki/internal/engine"
 	"github.com/rikukadev/sashiki/internal/hooks"
 	"github.com/rikukadev/sashiki/internal/oplog"
 	"github.com/rikukadev/sashiki/internal/state"
@@ -135,11 +136,24 @@ func newBaselineTag() string {
 // baseSnapshotRef は tag に対応する base の snapshot 完全修飾名を返す
 // (current の "@" 手前を base dataset とみなす)。build の応答に使う。
 func (m *Manager) baseSnapshotRef(tag string) string {
+	// **backend が予告できるならそれが正**(#372)。current baseline から dataset を
+	// 引き継ぐ推測は、promote(#129)で current が branch dataset に移った後に
+	// 実体(SnapshotBase = BaseDataset@tag)とずれ、CLI が存在しない名前を
+	// validate に渡して必ず失敗していた。
+	if n, ok := m.st.(baseSnapshotNamer); ok {
+		return n.BaseSnapshotName(tag)
+	}
 	cur := string(m.currentBaseline())
 	if i := strings.LastIndex(cur, "@"); i >= 0 {
 		return cur[:i+1] + tag
 	}
 	return tag
+}
+
+// baseSnapshotNamer は SnapshotBase が取る snapshot 名を実行前に言える backend。
+// fsx は snapshot ID が作成時に採番されるため実装できない(従来のフォールバック)。
+type baseSnapshotNamer interface {
+	BaseSnapshotName(tag string) string
 }
 
 // RefreshBaseline は refresh(build→validate→publish 一括)を非同期で開始する。
@@ -390,7 +404,16 @@ func (m *Manager) removeBaseAutoCnf(ctx context.Context) error {
 		return nil
 	}
 	autoCnf := filepath.Join(path, "data", "auto.cnf")
-	if err := os.Remove(autoCnf); err != nil && !os.IsNotExist(err) {
+	err = os.Remove(autoCnf)
+	if err != nil && os.IsPermission(err) && os.Geteuid() != 0 {
+		// systemd デプロイの sashikid は base datadir に書けない(#371)。
+		// helper の専用 verb で消す(対象パスは helper 側が解決する)
+		if out, herr := exec.Command("sudo", "-n", m.cfg.RootHelper, "rm-base-auto-cnf").CombinedOutput(); herr != nil {
+			return fmt.Errorf("remove %s via root-helper: %w: %s", autoCnf, herr, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove %s: %w", autoCnf, err)
 	}
 	return nil
@@ -479,6 +502,17 @@ func (m *Manager) runSourceLoader(ctx context.Context, rc RefreshConfig) error {
 	if err != nil || base == "" {
 		return fmt.Errorf("base path: %v", err)
 	}
+	// **非 root では一時 mysqld を spawn できない**(#371)。systemd デプロイの
+	// sashikid は User=sashiki で、--user=mysql の setuid も base datadir への
+	// アクセスもできない。_validate と同じく engine(root-helper 経由の
+	// systemctl)に乗せる。root 直起動(コンテナ / e2e)は従来の spawn のまま。
+	if os.Geteuid() != 0 {
+		if m.cfg.EngineType == "postgres" {
+			return fmt.Errorf("source_dir の refresh は postgres では root が必要です" +
+				"(一時 postgres を daemon から起動できないため。refresh_script を使うか root で動かしてください)")
+		}
+		return m.runSourceLoaderViaEngine(ctx, rc, base)
+	}
 	srv := baseline.Server{
 		DataDir:   base + "/data",
 		Socket:    "/tmp/sashiki-refresh.sock",
@@ -518,6 +552,84 @@ func (m *Manager) runSourceLoader(ctx context.Context, rc RefreshConfig) error {
 	}
 	oplog.Logf(ctx, "baseline refresh: source loader applied %d file(s): %v", len(applied), applied)
 	return nil
+}
+
+// refreshBranch は source loader が使う共有インスタンス名。_validate(:3999)と
+// 同じ発想で、名前の先頭 _ により実ブランチ(name_pattern)と衝突しない。
+const refreshBranch = "_refresh"
+
+// refreshPort は _refresh の port。_validate の 3999 と衝突させない。
+const refreshPort = 3998
+
+// runSourceLoaderViaEngine は base の datadir に対する一時 mysqld を
+// engine(systemctl + root-helper)で起動し、SQL 適用と app ユーザー同期を行う(#371)。
+//
+// spawn 版との違いは Start / 停止系だけで、SQL の適用は同じ実装を使う。
+// 停止は必ず graceful(Engine.Stop) — この直後に snapshot を取るため、
+// dirty な datadir を撮ると全ブランチが crash recovery 起動になる。
+func (m *Manager) runSourceLoaderViaEngine(ctx context.Context, rc RefreshConfig, base string) error {
+	// 共有名 _refresh を使うので同時実行を許さない(_validate と同じ理由)
+	m.validateMu.Lock()
+	defer m.validateMu.Unlock()
+
+	ins := engine.Instance{Branch: refreshBranch, DataDir: base + "/data", Port: refreshPort}
+	// 前回の残骸が datadir を掴んでいたら止める。snapshot 前なので graceful
+	if running, _ := m.eng.IsRunning(ctx, ins); running {
+		if err := m.eng.Stop(ctx, ins); err != nil {
+			return fmt.Errorf("leftover %s: %w", refreshBranch, err)
+		}
+	}
+
+	srv, ops := engineLoaderOps(m.eng, ins, m.cfg.MysqldBin)
+	applied, err := baseline.ApplyDirSync(ctx, srv, ops, rc.SourceDir, rc.SourceDB, m.cfg.AppUser, m.cfg.AppPass)
+	if err != nil {
+		return err
+	}
+	if m.cfg.AppUser != "" && m.cfg.AppPass != "" {
+		oplog.Logf(ctx, "baseline refresh: app user %s synced to config", m.cfg.AppUser)
+	}
+	oplog.Logf(ctx, "baseline refresh: source loader applied %d file(s) via engine: %v", len(applied), applied)
+	return nil
+}
+
+// engineLoaderOps は spawn 版の Ops のうち **プロセス管理だけ** を engine に
+// 差し替える(#371)。SQL の適用(Query / ApplyFile)は unit の socket 越しに
+// 素の実装をそのまま使う。
+//
+// 停止は Kill ではなく Stop(graceful)。この直後に snapshot を取るので、
+// dirty な datadir を撮ると全ブランチが crash recovery 起動になる。
+func engineLoaderOps(eng engine.Engine, ins engine.Instance, mysqldBin string) (baseline.Server, baseline.Ops) {
+	srv := baseline.Server{
+		DataDir: ins.DataDir,
+		// unit テンプレートの socket 規約(/tmp/mysql-%i.sock)に合わせる
+		Socket:    "/tmp/mysql-" + ins.Branch + ".sock",
+		MysqldBin: mysqldBin,
+	}
+	ops := baseline.RealOps()
+	ops.Start = func(ctx context.Context, _ baseline.Server) error {
+		return eng.Start(ctx, ins)
+	}
+	ops.WaitReady = func(ctx context.Context, _ baseline.Server, timeout time.Duration) error {
+		wctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return eng.WaitReady(wctx, ins)
+	}
+	ops.Shutdown = func(ctx context.Context, _ baseline.Server) error {
+		// 親 ctx が cancel されていても停止は完了させる(validateCandidate と同じ理由)
+		return eng.Stop(context.WithoutCancel(ctx), ins)
+	}
+	ops.WaitGone = func(ctx context.Context, _ baseline.Server, timeout time.Duration) error {
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			running, err := eng.IsRunning(ctx, ins)
+			if err == nil && !running {
+				return nil
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		return fmt.Errorf("%s: mysqld が %s 以内に停止しませんでした", ins.Branch, timeout)
+	}
+	return srv, ops
 }
 
 // scriptBaseEnv は外部スクリプトに渡す土台の環境。hooks.Runner が配線されていれば

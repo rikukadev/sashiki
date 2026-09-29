@@ -40,6 +40,14 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "sashiki-root-helper: 拒否: %v\n", err)
 		return 3
 	}
+	// 外部コマンドではなく helper 自身が実行する verb(#371)
+	if args[0] == "rm-base-auto-cnf" {
+		if err := cfg.RemoveBaseAutoCnf(); err != nil {
+			fmt.Fprintf(os.Stderr, "sashiki-root-helper: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	bin := roothelper.Binaries[args[0]]
 	cmd := exec.Command(bin, args[1:]...)
 	// 呼び出し元の環境は引き継がない(sudo が落とすが二重に)。

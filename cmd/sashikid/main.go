@@ -212,6 +212,7 @@ func main() {
 		PgRunUser:          cfg.Engine.Postgres.RunUser,
 		AppUser:            cfg.AppUser(),
 		AppPass:            cfg.AppPass(),
+		RootHelper:         cfg.RootHelper,
 		StateDir:           "/var/lib/sashiki/branches",
 		LazyCreate:         cfg.Branches.LazyCreate,
 		LazyMaxWait:        cfg.Branches.LazyCreateMaxWait,

@@ -3,6 +3,8 @@ package workspace
 import (
 	"context"
 	"errors"
+	"github.com/rikukadev/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/state"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +48,11 @@ type mockStorageWithBase struct {
 
 func (m *mockStorageWithBase) BasePath(ctx context.Context) (string, error) {
 	return m.base, nil
+}
+
+// BaseSnapshotName は ebszfs と同じ決定的な予告(#372)。
+func (m *mockStorageWithBase) BaseSnapshotName(tag string) string {
+	return "pool/base@" + tag
 }
 
 func (m *mockStorageWithBase) SnapshotBase(ctx context.Context, tag string) (storage.SnapshotRef, error) {
@@ -399,5 +406,85 @@ func TestRefreshAppUserOnlySkipsScript(t *testing.T) {
 	waitRefreshDone(t)
 	if !called {
 		t.Error("app-user-only refresh should run the loader path")
+	}
+}
+
+// engineLoaderOps はプロセス管理だけを engine に差し替える(#371)。
+// systemd デプロイ(非 root の sashikid)では一時 mysqld を spawn できないため、
+// _validate と同じく root-helper 経由の systemctl に乗せる。
+func TestEngineLoaderOpsWiring(t *testing.T) {
+	eng := &mockEngine{}
+	ins := engine.Instance{Branch: "_refresh", DataDir: "/tank/base/data", Port: 3998}
+	srv, ops := engineLoaderOps(eng, ins, "mysqld")
+
+	// SQL 適用は unit の socket 規約に向く
+	if srv.Socket != "/tmp/mysql-_refresh.sock" {
+		t.Errorf("socket = %q", srv.Socket)
+	}
+	ctx := context.Background()
+	if err := ops.Start(ctx, srv); err != nil {
+		t.Fatal(err)
+	}
+	if len(eng.started) != 1 || eng.started[0] != "_refresh" {
+		t.Errorf("engine 経由で起動していない: %v", eng.started)
+	}
+	// **停止は graceful(Stop)であること。** この直後に snapshot を取るので、
+	// Kill だと dirty な datadir を撮ってしまい、全ブランチが crash recovery
+	// 起動になる。ここが Kill に変わったら落ちるべき
+	if err := ops.Shutdown(ctx, srv); err != nil {
+		t.Fatal(err)
+	}
+	if len(eng.killed) != 0 {
+		t.Error("Shutdown が Kill を使っている(graceful でない)")
+	}
+	if len(eng.stopped) != 1 || eng.stopped[0] != "_refresh" {
+		t.Errorf("Stop が呼ばれていない: %v", eng.stopped)
+	}
+	// 親 ctx が cancel されていても停止は完了する(validate と同じ要求)
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ops.Shutdown(cctx, srv); err != nil {
+		t.Errorf("cancel 済み ctx で停止できない: %v", err)
+	}
+	// IsRunning=false の mock では WaitGone は即座に成功する
+	if err := ops.WaitGone(ctx, srv, time.Second); err != nil {
+		t.Errorf("WaitGone: %v", err)
+	}
+}
+
+// 非 root で postgres の source_dir refresh は、分かるエラーで止まる(#371)。
+// 黙って spawn に進むと --user の setuid で落ち、原因が遠い。
+func TestSourceLoaderPostgresNonRootError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root では spawn 経路に進むためこの検証はできない")
+	}
+	m := newTestManagerCfg(t, &mockStorageWithBase{base: t.TempDir()}, &mockEngine{}, "", func(c *Config) {
+		c.EngineType = "postgres"
+	})
+	err := m.runSourceLoader(context.Background(), RefreshConfig{SourceDir: t.TempDir()})
+	if err == nil {
+		t.Fatal("非 root の postgres source_dir がエラーにならない")
+	}
+	if !strings.Contains(err.Error(), "root") {
+		t.Errorf("原因の分からないエラー: %v", err)
+	}
+}
+
+// promote 後の build は、予告する snapshot 名が実体(SnapshotBase = base 側)と
+// 一致しなければならない(#372)。current の dataset から推測すると branch 側の
+// 存在しない名前を予告し、CLI がそれを validate に渡して必ず失敗する。
+func TestPrepareBuildAfterPromotePredictsBaseSnapshot(t *testing.T) {
+	st := &mockStorageWithBase{base: t.TempDir()}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	// promote 相当: current baseline を branch dataset の snapshot にする
+	if err := m.db.RegisterBaseline("pool/branches/rotate-tmp@baseline-old", state.BaselineProvenance{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.db.SetCurrentBaseline("pool/branches/rotate-tmp@baseline-old"); err != nil {
+		t.Fatal(err)
+	}
+	tag, snap := m.PrepareBuild()
+	if want := "pool/base@" + tag; snap != want {
+		t.Errorf("予告 = %q, want %q(実体は base 側に取られる)", snap, want)
 	}
 }
