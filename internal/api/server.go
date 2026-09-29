@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -850,6 +851,12 @@ type branchJSON struct {
 	// 表示する接続コマンドを選ぶ(#238 の実機検証で postgres でも mysql と案内
 	// していたのが分かったため)。
 	Engine string `json:"engine,omitempty"`
+	// URI は Port / Host / User と同じ 3 つ組を URI 形式にしたもの(#379)。
+	// proxy 有効時の user は `dev@<branch>` で `@` を含むため、素朴に
+	// `user@host` と連結すると `@` が 2 個になりホストが誤って解釈される。
+	// 利用者ごとに同じ間違いが再生産されるので、エスケープ済みの値を返す。
+	// **パスワードは含めない**(ログ・画面・ポータルに載ると漏れるため)。
+	URI string `json:"uri,omitempty"`
 }
 
 // connPort / connUser は「接続に使う値」を返す。proxy が有効なら固定エンドポイント
@@ -869,6 +876,25 @@ func (s *Server) connUser(branch string) string {
 	return s.user
 }
 
+// connURI は connPort / connHost / connUser と同じ 3 つ組を URI 形式で返す(#379)。
+// user は `dev@<branch>` のように `@` を含みうるので url.User に渡して
+// エスケープさせる(手で組むと `@` が 2 個になりホストを取り違える)。
+// パスワードは載せない — URI はログ・画面・ポータルに出る前提の値なので、
+// 秘密を混ぜると漏れる経路が増える。利用者が config の app_pass を差し込む。
+func (s *Server) connURI(branch string, enginePort int) string {
+	scheme := "mysql"
+	if s.engine == "postgres" {
+		scheme = "postgres"
+	}
+	u := &url.URL{
+		Scheme: scheme,
+		User:   url.User(s.connUser(branch)),
+		Host:   net.JoinHostPort(s.domain, strconv.Itoa(s.connPort(enginePort))),
+		Path:   "/",
+	}
+	return u.String()
+}
+
 func (s *Server) toJSON(i workspace.Info) branchJSON {
 	b := branchJSON{
 		Name:             i.Name,
@@ -877,6 +903,7 @@ func (s *Server) toJSON(i workspace.Info) branchJSON {
 		Port:             s.connPort(i.Port),
 		Host:             s.domain,
 		User:             s.connUser(i.Name),
+		URI:              s.connURI(i.Name, i.Port),
 		EnginePort:       i.Port,
 		Engine:           s.engine,
 		OriginSnapshot:   i.OriginSnapshot,
