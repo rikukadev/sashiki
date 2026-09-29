@@ -23,7 +23,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 
 | コマンド | 何をするか |
 |---|---|
-| `create <name>` | 作る。`--wait`(既定)/ `--no-wait` / `--exist-ok`(既にあれば既存を返す)/ `--profile P` / `--ttl D` / `--port N` / `--baseline <snapshot>` / `--owner O` / `--purpose P` / `--source <json>` |
+| `create <name>` | 作る。`--wait`(既定)/ `--no-wait` / `--exist-ok`(既にあれば既存を返す)/ `--profile P` / `--ttl D` \| `--expires-at <RFC3339>`(排他)/ `--port N` / `--baseline <snapshot>` / `--owner O` / `--purpose P` / `--source <json>` |
 | `list` / `show <name>` | 一覧 / 詳細。`show` は `stale`(origin が current baseline より古い)と `baseline:`(promote 元)も出す |
 | `env <name>` | `DB_HOST=` / `DB_PORT=` / `DB_USER=` を出す(dotenv)。`--prefix P` で接頭辞を変える。パスワードと内部ポートは出さない |
 | `connect <name>` | engine に合わせたクライアント(`mysql` / `psql`)を exec する。パスワードは `SASHIKI_DB_PASSWORD`(無ければクライアントが尋ねる)、接続先は API の host(`SASHIKI_DB_HOST` で上書き可)。Postgres は `SASHIKI_DB_NAME`(既定 `postgres`)に繋ぐ |
@@ -32,7 +32,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 | `retry <name>` | `error` のブランチで失敗した操作をやり直す |
 | `delete <name>` | 消す |
 | `sleep <name>` / `wake <name>` | 手動で停止 / 起床(同期) |
-| `lease renew <name> --for <dur> [--json]` | 絶対期限を延ばす(例 `7d`) |
+| `lease renew <name> (--for <dur> \| --until <RFC3339>) [--json]` | 期限を設定し直す。`--for` は今からの期間(例 `7d`)、`--until` は絶対時刻。他システムと寿命を揃えるなら `--until`(#381) |
 | `hooks run <name> <event>` | hook だけを手で流す |
 
 変更操作は既定で完了まで待つ。`--no-wait` で operation id だけ返し、`--timeout <dur>` /
@@ -127,12 +127,12 @@ allowlist ヘルパーで、手で使うものではない。config の `root_he
 | メソッド / パス | 応答 | 備考 |
 |---|---|---|
 | `GET /v1/branches` | 200 | 一覧(ページングなし) |
-| `POST /v1/branches` | 202 / 200 / 409 | body `{name, port?, profile?, owner?, purpose?, source?, ttl?, baseline?}`。`?exist_ok=true` なら既存を 200 で返す |
+| `POST /v1/branches` | 202 / 200 / 409 | body `{name, port?, profile?, owner?, purpose?, source?, ttl?, expires_at?, baseline?}`。`ttl`(相対)と `expires_at`(RFC3339 の絶対時刻)は排他。`?exist_ok=true` なら既存を 200 で返す |
 | `GET /v1/branches/{name}` | 200 / 404 | |
 | `POST /v1/branches/{name}/reset` \| `/recreate` \| `/retry` | 202 | 404 / 412(promote 元)は同期で返す。409 = 実行中の操作あり |
 | `DELETE /v1/branches/{name}` | 202 | 404 / 412 は同期で返す |
 | `POST /v1/branches/{name}/sleep` \| `/wake` | 200 | 同期 |
-| `POST /v1/branches/{name}/lease` | 200 | body `{for: "7d"}` |
+| `POST /v1/branches/{name}/lease` | 200 | body `{for: "7d"}` か `{until: "<RFC3339>"}`(排他) |
 | `POST /v1/branches/{name}/hooks/{event}` | 200 | **admin scope**。hooks dir の実行ファイルを手で流す |
 | `GET /v1/branches/{name}/schema` | 200 | **admin scope**。データブラウザ |
 | `POST /v1/branches/{name}/query` | 200 | **admin scope**。body `{sql}`。10 秒 / 200 行 / セル 64KB で打ち切り |
