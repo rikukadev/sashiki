@@ -7,6 +7,13 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.13.2](https://github.com/rikukadev/sashiki/compare/v0.13.1...v0.13.2) (2026-09-29)
+
+
+### Bug Fixes
+
+* **init:** 再起動しても mysqld が起動できるよう同梱 AppArmor を無効化する ([#377](https://github.com/rikukadev/sashiki/issues/377)) ([41766d5](https://github.com/rikukadev/sashiki/commit/41766d5e862c2b3643ca384075f9110e27ab1556)), closes [#376](https://github.com/rikukadev/sashiki/issues/376)
+
 ## [0.13.1](https://github.com/rikukadev/sashiki/compare/v0.13.0...v0.13.1) (2026-09-29)
 
 
