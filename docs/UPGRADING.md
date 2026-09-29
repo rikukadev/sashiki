@@ -6,6 +6,31 @@
 
 v0.x の間は API / config が固定されていないので、マイナー版で挙動が変わることがある。
 
+## 0.13.x → 0.13.2
+
+### 既存ホストは AppArmor の対処が要る(#376)
+
+**0.13.1 以前の `sashiki init` で作った mysql ホストは、再起動すると全ブランチの
+mysqld が起動できなくなる。** バイナリを上げるだけでは直らない。init が置く設定の
+問題なので、既存ホストには次の 2 行が要る。
+
+```bash
+sudo ln -s /etc/apparmor.d/usr.sbin.mysqld /etc/apparmor.d/disable/
+sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld
+```
+
+init は mysql-server 同梱の AppArmor プロファイルを、実行中のカーネルからアンロード
+するだけだった。ディスクには残るので再起動で再ロードされ、sashiki のプロファイルに
+勝って datadir とログへの書込を拒否する。**init 直後は動くので、最初の再起動まで
+気づけない。**
+
+症状は `timeout: mysqld@<name> did not become ready in 30s`。mysqld は error log を
+開く前に死ぬので `/var/log/sashiki/` には何も残らず、手掛かりは kernel log の
+`apparmor="DENIED" ... profile="/usr/sbin/mysqld"` だけになる。
+
+0.13.2 からは `sashiki doctor` が `apparmor stock profile` でこの状態を検知し、
+再起動の**前**に言う。新しく init するホストは対処済みで作られる。
+
 ## 0.12.x → 0.13.0
 
 ### init が app_pass を config に書かなくなる(#354)

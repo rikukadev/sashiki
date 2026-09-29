@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -114,16 +115,16 @@ func installSudoers(pool string, useHelper bool) error {
 
 const (
 	apparmorProfilePath = "/etc/apparmor.d/sashiki-mysqld"
-	// 旧 PoC が置いていた disable symlink。残っていると再起動でプロファイルが
-	// 無効化されるため init が掃除する。
-	apparmorLegacyDisableLink = "/etc/apparmor.d/disable/usr.sbin.mysqld"
+	// mysql-server 同梱のプロファイルと、それを無効化する symlink(相対パス)。
+	apparmorStockProfile     = "etc/apparmor.d/usr.sbin.mysqld"
+	apparmorStockDisableLink = "etc/apparmor.d/disable/usr.sbin.mysqld"
 )
 
 // apparmorProfile は mysqld を閉じ込める AppArmor プロファイル全文を生成する。
-// Ubuntu 24.04 の mysql-server 同梱 /etc/apparmor.d/usr.sbin.mysqld は中身が
-// 空のプレースホルダ(プロファイルブロック無し)で、local override 方式は
-// どこからも include されず no-op になるため、sashiki が完全なプロファイルを
-// 配布して enforce でロードする(#79)。
+// 同梱の /etc/apparmor.d/usr.sbin.mysqld は版によって中身が違う(空のプレース
+// ホルダのことも、実体のあるプロファイルのこともある)ので当てにせず、sashiki が
+// 完全なプロファイルを配布して enforce でロードする(#79)。同梱側は
+// disableStockApparmorProfile で無効化する(#376)。
 // 許可パスは sashiki が mysqld を動かす全形態を網羅する:
 //   - mysqld@<branch>(datadir=/<pool>/branches/<name>/data、/tmp/mysql-*.sock)
 //   - baseline import(datadir=/<pool>/base/data、/tmp/sashiki-baseline.*)
@@ -221,21 +222,50 @@ profile sashiki-mysqld /usr/sbin/mysqld flags=(attach_disconnected) {
 `, pool)
 }
 
+// disableStockApparmorProfile は mysql-server 同梱のプロファイルを、再起動を
+// またいで無効化する(#376)。root はテスト用の起点で、本番は "/"。
+//
+// アンロードだけでは足りない。ディスクに残った同梱プロファイルは再起動で
+// 再ロードされ、同じバイナリへの attach で sashiki-mysqld に勝ち、datadir と
+// ログへの書込を拒否する。init 直後は動くので、**最初の再起動まで気づけない**。
+//
+// 以前はこの symlink を「旧 PoC の残骸」として削除していた。閉じ込めを同梱
+// プロファイルに頼っていた頃は正しかったが、自前のプロファイルを配る今は逆で、
+// この symlink こそが要る。
+func disableStockApparmorProfile(root string) error {
+	stock := filepath.Join(root, apparmorStockProfile)
+	if _, err := os.Stat(stock); err != nil {
+		if os.IsNotExist(err) {
+			return nil // 同梱プロファイルが無い(別ディストリ / コンテナ)
+		}
+		return err
+	}
+	link := filepath.Join(root, apparmorStockDisableLink)
+	if _, err := os.Lstat(link); err == nil {
+		return nil // 既に無効化済み(冪等)
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		return err
+	}
+	// リンク先は実ホスト上の絶対パス(root がテスト用でも中身は同じ形にする)
+	return os.Symlink("/"+apparmorStockProfile, link)
+}
+
 // installApparmorProfile はプロファイルを書き出して apparmor_parser -r でロードする。
 // ロード失敗は init 全体を止めず、警告を stderr に出して続行する
 // (mysqld を起動不能にして壊すより、閉じ込めを緩める方を選ぶ。ただし無言にしない)。
 func installApparmorProfile(pool string) error {
-	// 旧 e2e / PoC がロードした "/usr/sbin/mysqld" プロファイルがカーネルに残って
-	// いると attach が競合して本プロファイルが効かないため、先にアンロードする
+	// 同梱の "/usr/sbin/mysqld" プロファイルがカーネルに居ると attach が競合して
+	// 本プロファイルが効かないため、先にアンロードする。**これは実行中のカーネルに
+	// しか効かない**ので、ディスク側も下で無効化する
 	if f, err := os.OpenFile("/sys/kernel/security/apparmor/.remove", os.O_WRONLY, 0); err == nil {
 		_, _ = f.WriteString("/usr/sbin/mysqld")
 		_ = f.Close()
 	}
-	// 旧 PoC の disable symlink を掃除(残っていると再起動で無効化される)
-	if fi, err := os.Lstat(apparmorLegacyDisableLink); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		if err := os.Remove(apparmorLegacyDisableLink); err != nil {
-			fmt.Fprintf(os.Stderr, "sashiki init: 警告: 旧 disable symlink の削除に失敗: %v\n", err)
-		}
+	if err := disableStockApparmorProfile("/"); err != nil {
+		// 続行はするが無言にしない。このままだと次の再起動で全 mysqld が起動不能になる
+		fmt.Fprintf(os.Stderr, "sashiki init: 警告: 同梱 AppArmor プロファイルを無効化できません。"+
+			"再起動後に mysqld が起動できなくなります(sashiki doctor で確認): %v\n", err)
 	}
 	if err := os.WriteFile(apparmorProfilePath, []byte(apparmorProfile(pool)), 0o644); err != nil {
 		return err

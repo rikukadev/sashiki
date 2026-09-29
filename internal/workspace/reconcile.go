@@ -272,6 +272,22 @@ func (m *Manager) Doctor(ctx context.Context) (DoctorReport, error) {
 		}
 	}
 
+	// mysql-server 同梱の AppArmor プロファイルが生きていると、再起動後に全 mysqld が
+	// datadir とログへの書込を拒否されて起動できなくなる(#376)。mysqld は error log を
+	// 開く前に死ぬので、ここで言わないと手掛かりが kernel log にしか残らない。
+	if m.cfg.EngineType != "postgres" {
+		if applicable, conflict := apparmorStockConflict(apparmorRoot); applicable {
+			if conflict {
+				add("apparmor stock profile", checkError, "同梱の /etc/apparmor.d/usr.sbin.mysqld が有効。"+
+					"再起動後に mysqld が起動できなくなります(既に再起動済みなら今も起動できません)。対処: "+
+					"`sudo ln -s /etc/apparmor.d/usr.sbin.mysqld /etc/apparmor.d/disable/ && "+
+					"sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld`")
+			} else {
+				add("apparmor stock profile", checkOK, "disabled")
+			}
+		}
+	}
+
 	// pool 健全性(zpool status -x 相当)
 	if psc, ok := m.st.(storage.PoolStatusChecker); ok {
 		healthy, detail, err := psc.PoolStatus(ctx)
