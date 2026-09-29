@@ -7,6 +7,13 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.13.1](https://github.com/rikukadev/sashiki/compare/v0.13.0...v0.13.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **refresh:** systemd デプロイで source_dir の refresh を動かす ([#373](https://github.com/rikukadev/sashiki/issues/373)) ([937f51a](https://github.com/rikukadev/sashiki/commit/937f51aac0b1fa17c3cba6ae4c392a94e5df7ddb)), closes [#371](https://github.com/rikukadev/sashiki/issues/371) [#372](https://github.com/rikukadev/sashiki/issues/372)
+
 ## [0.13.0](https://github.com/rikukadev/sashiki/compare/v0.12.1...v0.13.0) (2026-09-27)
 
 
