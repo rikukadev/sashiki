@@ -170,3 +170,41 @@ func TestApparmorProfilePoolPropagation(t *testing.T) {
 		}
 	}
 }
+
+// 同梱プロファイルは再起動をまたいで無効化する(#376)。アンロードだけだと
+// init 直後は動き、最初の再起動で全 mysqld が起動不能になる。
+func TestDisableStockApparmorProfile(t *testing.T) {
+	t.Run("同梱プロファイルがあれば disable の symlink を作る", func(t *testing.T) {
+		root := t.TempDir()
+		stock := filepath.Join(root, apparmorStockProfile)
+		if err := os.MkdirAll(filepath.Dir(stock), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(stock, []byte("profile"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := disableStockApparmorProfile(root); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.Readlink(filepath.Join(root, apparmorStockDisableLink))
+		if err != nil {
+			t.Fatalf("symlink が無い: %v", err)
+		}
+		if want := "/etc/apparmor.d/usr.sbin.mysqld"; got != want {
+			t.Errorf("リンク先 = %q, want %q", got, want)
+		}
+		// 冪等: 2 回目も成功し、リンクは変わらない
+		if err := disableStockApparmorProfile(root); err != nil {
+			t.Errorf("2 回目が失敗: %v", err)
+		}
+	})
+	t.Run("同梱プロファイルが無ければ何もしない", func(t *testing.T) {
+		root := t.TempDir()
+		if err := disableStockApparmorProfile(root); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(filepath.Join(root, apparmorStockDisableLink)); err == nil {
+			t.Error("同梱プロファイルが無いのに symlink を作った")
+		}
+	})
+}
