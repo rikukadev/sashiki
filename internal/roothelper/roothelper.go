@@ -14,6 +14,7 @@ package roothelper
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 
@@ -111,9 +112,42 @@ func (c Config) Validate(args []string) error {
 		return c.validateZpool(args[1:])
 	case "systemctl":
 		return c.validateSystemctl(args[1:])
+	case "rm-base-auto-cnf":
+		// 引数を取らない。対象パスは helper 自身が config の base_dataset から
+		// 解決する(#371)。呼び出し側にパスを渡させると、検証がパス文字列の
+		// 正しさ比べになってしまう
+		if len(args) != 1 {
+			return fmt.Errorf("rm-base-auto-cnf は引数を取りません")
+		}
+		return nil
 	default:
 		return fmt.Errorf("コマンド %q は許可されていません", args[0])
 	}
+}
+
+// RemoveBaseAutoCnf は base datadir の auto.cnf を消す(#371)。
+//
+// auto.cnf は server_uuid の担い手で、snapshot に残すと全ブランチが同一 UUID に
+// なる(#80)。削除には root が要り、systemd デプロイの sashikid(User=sashiki)
+// からは消せないため helper の語彙にした。
+//
+// **対象は base の mountpoint 配下の data/auto.cnf 固定。** パスを引数で受けず、
+// base_dataset の mountpoint を zfs から引いて組み立てる。helper に「任意パスの
+// rm」を持たせないため。
+func (c Config) RemoveBaseAutoCnf() error {
+	out, err := exec.Command(Binaries["zfs"], "get", "-H", "-o", "value", "mountpoint", c.BaseDataset).Output()
+	if err != nil {
+		return fmt.Errorf("mountpoint of %s: %w", c.BaseDataset, err)
+	}
+	mp := strings.TrimSpace(string(out))
+	if mp == "" || mp == "-" || mp == "none" || !strings.HasPrefix(mp, "/") {
+		return fmt.Errorf("%s の mountpoint を解決できません: %q", c.BaseDataset, mp)
+	}
+	autoCnf := mp + "/data/auto.cnf"
+	if err := os.Remove(autoCnf); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove %s: %w", autoCnf, err)
+	}
+	return nil
 }
 
 // --- dataset の形 ---

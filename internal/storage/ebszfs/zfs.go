@@ -200,6 +200,14 @@ func (b *Backend) DeleteBaselineSnapshot(ctx context.Context, snap storage.Snaps
 }
 
 // SnapshotBase は base から新しいベースライン snapshot を取得する。
+// BaseSnapshotName は SnapshotBase が取る snapshot の完全修飾名を返す(#372)。
+// build の API 応答は実行前に snapshot 名を予告する必要があり、ここが実体と
+// ずれると CLI が存在しない名前を validate に渡す。ebszfs は決定的なので
+// 正確に予告できる。
+func (b *Backend) BaseSnapshotName(tag string) string {
+	return b.cfg.BaseDataset + "@" + tag
+}
+
 func (b *Backend) SnapshotBase(ctx context.Context, tag string) (storage.SnapshotRef, error) {
 	snap := b.cfg.BaseDataset + "@" + tag
 	if _, err := b.run(ctx, "snapshot", snap); err != nil {
