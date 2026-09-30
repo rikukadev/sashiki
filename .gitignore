@@ -3,3 +3,8 @@ bin/
 .DS_Store
 dist/
 .claude/worktrees/
+
+# go build ./cmd/... がカレントに吐くバイナリ(誤コミット防止、#387 で実際に踏んだ)
+/sashiki
+/sashikid
+/sashiki-root-helper
