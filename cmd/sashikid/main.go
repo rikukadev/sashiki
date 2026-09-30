@@ -245,6 +245,7 @@ func main() {
 	srv := api.New(mgr, cfg.Domain, cfg.Engine.Type, cfg.AppUser(), cfg.AppPass(), token, db)
 	srv.SetOps(ops.New(db))
 	srv.SetTrustLoopback(cfg.Auth.TrustLoopback)
+	srv.SetHostName(cfg.Name) // #383: 応答にホスト識別名を含める
 	// 接続情報(host/port/user)を proxy 宛にするためのポート。proxy 無効なら 0 で、
 	// その場合はブランチへ直結する形の値を返す(#260)。
 	srv.SetProxyListen(cfg.Listen.Proxy)

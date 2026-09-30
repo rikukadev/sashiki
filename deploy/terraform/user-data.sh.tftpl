@@ -81,6 +81,14 @@ SASHIKI_POOL="$POOL" /usr/local/sbin/sashiki-persist-state
 set +x
 CONFIG=/etc/sashiki/config.yaml
 if [ -f "$CONFIG" ]; then
+  # var.name を config の name(ホスト識別名、#383)に通す。API の応答に
+  # host_name として現れ、複数ホストをマージする側が区別に使う。
+  if grep -qE '^name:' "$CONFIG"; then
+    sed -i -E "s/^name:.*/name: ${name}/" "$CONFIG"
+  else
+    sed -i "1i name: ${name}" "$CONFIG"
+  fi
+
   # init は app_user / app_pass を生成する(旧名 proxy_user / proxy_pass も許容)。
   sed -i -E "s/^( *)(app_user|proxy_user):.*/\1app_user: ${proxy_user}/" "$CONFIG"
 

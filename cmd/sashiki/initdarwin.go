@@ -24,6 +24,18 @@ var configDarwinTmpl string
 //go:embed assets/sashikid.plist.tmpl
 var plistTmpl string
 
+// defaultHostName は config の name の既定値(#383)。OS のホスト名を使い、
+// 取れなければ "sashiki"。識別名なので厳密である必要はなく、後から config で
+// 変えられる。
+func defaultHostName() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "sashiki"
+	}
+	// mDNS の .local が付いていることがある(macOS)。表示名としては冗長なので落とす。
+	return strings.TrimSuffix(h, ".local")
+}
+
 func cmdInitDarwin(opts initOpts) int {
 	// engine で経路を分ける(#238)。postgres は initdb / pg_ctl を使う。
 	switch opts.engine {
@@ -130,7 +142,8 @@ func cmdInitDarwin(opts initOpts) int {
 			done: func() bool { _, err := os.Stat(configPath); return err == nil },
 			run: func() error {
 				data, err := renderTmpl(configDarwinTmpl, map[string]string{
-					"Root": root, "MysqldBin": mysqldBin, "AppPass": yamlQuote(appPass)})
+					"Root": root, "MysqldBin": mysqldBin, "AppPass": yamlQuote(appPass),
+					"HostName": defaultHostName()})
 				if err != nil {
 					return err
 				}

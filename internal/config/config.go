@@ -19,8 +19,15 @@ import (
 
 // Config は sashikid 全体の設定。
 type Config struct {
-	Listen    Listen `yaml:"listen"`
-	Domain    string `yaml:"domain"`
+	Listen Listen `yaml:"listen"`
+	// Name はこのホストの識別名(#383)。API の応答(healthz / capacity / branches)に
+	// host_name として含まれ、複数ホストの一覧をマージする側(ポータル / CLI / 監視)が
+	// どのホストの応答かを区別できるようにする。連合機能ではなく自己記述 —
+	// 各ホストは自分が複数台のうちの 1 台であることを知らなくてよい。
+	// Domain(接続先)と分けるのは、接続情報と表示ラベルの二役を 1 つのフィールドに
+	// 負わせない(mDNS 名や共有ドメインは人に見せる名前にならない)ため。空なら省略。
+	Name   string `yaml:"name"`
+	Domain string `yaml:"domain"`
 	StateDB   string `yaml:"state_db"`
 	RunDir    string `yaml:"run_dir"`    // 実行時の一時領域(socket / sentinel)。既定 /run/sashiki(仕様 21章)
 	LogDir    string `yaml:"log_dir"`    // ログ出力の基点。既定 /var/log/sashiki(仕様 21章)
