@@ -1876,3 +1876,48 @@ func TestPromoteBranchRestartsOnFailure(t *testing.T) {
 		t.Errorf("promote 失敗時は current を変えないはず (current=%q)", got)
 	}
 }
+
+// LeaseUntil は絶対時刻をそのまま expires_at にする(#381)。
+// 相対期間から換算しないので、同じ値を渡せば何回呼んでも同じ期限になる
+// (他システムと寿命を揃えるための性質)。
+func TestLeaseUntilSetsAbsoluteExpiry(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
+
+	got, err := m.LeaseUntil(context.Background(), "pr-1", want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(want) {
+		t.Errorf("LeaseUntil returned %v, want %v", got, want)
+	}
+	info, _ := m.Get(context.Background(), "pr-1")
+	if info.ExpiresAt == nil {
+		t.Fatal("expires_at not set")
+	}
+	if !info.ExpiresAt.Equal(want) {
+		t.Errorf("expires_at = %v, want %v", *info.ExpiresAt, want)
+	}
+
+	// 冪等: 同じ値を渡せば同じ期限。相対指定だとここが毎回ずれる。
+	again, err := m.LeaseUntil(context.Background(), "pr-1", want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Equal(got) {
+		t.Errorf("2 回目が %v、1 回目は %v", again, got)
+	}
+
+	// 過去は拒否(作った瞬間に回収対象になる期限を設定させない)
+	if _, err := m.LeaseUntil(context.Background(), "pr-1", time.Now().Add(-time.Hour)); err == nil {
+		t.Error("過去の期限は拒否されるべき")
+	}
+
+	// 存在しないブランチ
+	if _, err := m.LeaseUntil(context.Background(), "nope", want); err == nil {
+		t.Error("存在しないブランチはエラーになるべき")
+	}
+}

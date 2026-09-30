@@ -35,14 +35,14 @@ func main() {
 
 func usage() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  sashiki create <name> [--exist-ok] [--port N] [--owner O] [--purpose P] [--profile P] [--ttl D] [--baseline B] [--source JSON] [--json]
+  sashiki create <name> [--exist-ok] [--port N] [--owner O] [--purpose P] [--profile P] [--ttl D | --expires-at RFC3339] [--baseline B] [--source JSON] [--json]
   sashiki delete <name> [--json]
   sashiki reset  <name> [--json]
   sashiki recreate <name> [--json]
   sashiki retry <name> [--json]
   sashiki sleep  <name> [--json]
   sashiki wake   <name> [--json]
-  sashiki lease renew <name> --for <dur>   (例 7d, 1h)
+  sashiki lease renew <name> (--for <dur> | --until <RFC3339>)   (例 7d, 1h / 2026-10-01T10:00:00Z)
   sashiki hooks run <name> <event>
   sashiki list   [--json]
   sashiki show   <name> [--json]
@@ -266,7 +266,7 @@ func parseFlags(args []string) (pos []string, jsonOut bool, err error) {
 // parseFlagsKV は create 用。--json / --port に加え、--owner/--purpose/--source/--profile を拾う。
 func parseFlagsKV(args []string) (pos []string, port int, jsonOut bool, kv map[string]string, err error) {
 	pos, opts, err := parseArgs(args,
-		[]string{"--port", "--owner", "--purpose", "--source", "--profile", "--ttl", "--baseline"},
+		[]string{"--port", "--owner", "--purpose", "--source", "--profile", "--ttl", "--expires-at", "--baseline"},
 		[]string{"--json", "--exist-ok"})
 	if err != nil {
 		return nil, 0, false, nil, err
@@ -305,6 +305,10 @@ func cmdCreate(args []string) int {
 		if v := kv[k]; v != "" {
 			body[k] = v
 		}
+	}
+	// --expires-at は JSON では expires_at(#381)。ttl と排他なのは API 側で見る。
+	if v := kv["expires-at"]; v != "" {
+		body["expires_at"] = v
 	}
 	if src := kv["source"]; src != "" {
 		body["source"] = json.RawMessage(src)
@@ -402,7 +406,7 @@ func cmdLease(args []string) int {
 		return usage()
 	}
 	rest := args[1:]
-	var name, dur string
+	var name, dur, until string
 	var jsonOut bool
 	for i := 0; i < len(rest); i++ {
 		switch rest[i] {
@@ -413,6 +417,14 @@ func cmdLease(args []string) int {
 			}
 			i++
 			dur = rest[i]
+		case "--until":
+			// 絶対時刻での延長(#381)。他システムと期限を揃えるときに使う。
+			if i+1 >= len(rest) {
+				fmt.Fprintln(os.Stderr, "sashiki: --until requires a value")
+				return exitUsage
+			}
+			i++
+			until = rest[i]
 		case "--json":
 			jsonOut = true
 		default:
@@ -429,11 +441,19 @@ func cmdLease(args []string) int {
 			name = rest[i]
 		}
 	}
-	if name == "" || dur == "" {
-		fmt.Fprintln(os.Stderr, "usage: sashiki lease renew <name> --for <dur>  (例 7d, 1h)")
+	if name == "" || (dur == "" && until == "") {
+		fmt.Fprintln(os.Stderr, "usage: sashiki lease renew <name> (--for <dur> | --until <RFC3339>)  (例 7d, 1h / 2026-10-01T10:00:00Z)")
 		return usage()
 	}
-	code, data, err := call("POST", "/v1/branches/"+name+"/lease", map[string]any{"for": dur})
+	if dur != "" && until != "" {
+		fmt.Fprintln(os.Stderr, "sashiki lease: --for と --until は同時に指定できません")
+		return exitUsage
+	}
+	body := map[string]any{"for": dur}
+	if until != "" {
+		body = map[string]any{"until": until}
+	}
+	code, data, err := call("POST", "/v1/branches/"+name+"/lease", body)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError

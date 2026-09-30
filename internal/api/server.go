@@ -557,6 +557,41 @@ type createReq struct {
 	Source   json.RawMessage `json:"source,omitempty"`
 	TTL      string          `json:"ttl,omitempty"`      // 初期 lease 期限(例 "7d","1h"）。空なら無期限
 	Baseline string          `json:"baseline,omitempty"` // 作成元 baseline snapshot。空なら current(#82)
+	// ExpiresAt は期限を絶対時刻(RFC3339)で指定する(#381)。ttl と排他。
+	// 他システムと寿命を揃えたいときに使う — 相対指定だと「API が処理した時刻」が
+	// 起点になるので、同じ期限を狙って別々のシステムへ指示しても揃わない。
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+// parseExpiry は相対(ttl / for)と絶対(expires_at / until)を排他で受け、
+// 期限の絶対時刻を返す(#381)。どちらも空なら zero(= 期限なし)。
+//
+// rel / abs はエラーメッセージ用のフィールド名。
+func parseExpiry(ttl, expiresAt, rel, abs string) (time.Time, error) {
+	if ttl != "" && expiresAt != "" {
+		return time.Time{}, fmt.Errorf("%s and %s are mutually exclusive", rel, abs)
+	}
+	if expiresAt != "" {
+		t, err := time.Parse(time.RFC3339, expiresAt)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("invalid %s (need RFC3339): %v", abs, err)
+		}
+		if !t.After(time.Now()) {
+			return time.Time{}, fmt.Errorf("%s must be in the future", abs)
+		}
+		return t.UTC(), nil
+	}
+	if ttl != "" {
+		d, err := parseDur(ttl)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("invalid %s: %v", rel, err)
+		}
+		if d <= 0 {
+			return time.Time{}, fmt.Errorf("%s must be > 0", rel)
+		}
+		return time.Now().UTC().Add(d), nil
+	}
+	return time.Time{}, nil
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -571,13 +606,10 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	existOK := r.URL.Query().Get("exist_ok") == "true"
-	var ttl time.Duration
-	if req.TTL != "" {
-		var perr error
-		if ttl, perr = parseDur(req.TTL); perr != nil {
-			writeErr(w, http.StatusBadRequest, "invalid_name", "invalid ttl: "+perr.Error())
-			return
-		}
+	expiry, perr := parseExpiry(req.TTL, req.ExpiresAt, "ttl", "expires_at")
+	if perr != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_request", perr.Error())
+		return
 	}
 	// 既存チェック(#82: 非同期化の前段)。既にあれば同期で返す:
 	// exist_ok なら 200+branch(冪等)、そうでなければ 409。
@@ -595,8 +627,8 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		if _, e := s.mgr.CreateWithMetaFrom(ctx, req.Name, req.Port, meta, req.Baseline); e != nil {
 			return e
 		}
-		if ttl > 0 {
-			if _, e := s.mgr.Lease(ctx, req.Name, ttl); e != nil {
+		if !expiry.IsZero() {
+			if _, e := s.mgr.LeaseUntil(ctx, req.Name, expiry); e != nil {
 				return e
 			}
 		}
@@ -606,6 +638,8 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 type leaseReq struct {
 	For string `json:"for"` // 追加する期間(例 "7d")。now からの新しい expires_at を設定
+	// Until は期限を絶対時刻(RFC3339)で指定する(#381)。for と排他。
+	Until string `json:"until,omitempty"`
 }
 
 // handleLease は lease を renew する(POST /v1/branches/{name}/lease)。
@@ -613,18 +647,18 @@ type leaseReq struct {
 func (s *Server) handleLease(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	var req leaseReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.For == "" {
-		writeErr(w, http.StatusBadRequest, "invalid_name", "invalid request body (need {\"for\":\"7d\"})")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.For == "" && req.Until == "") {
+		writeErr(w, http.StatusBadRequest, "invalid_request", "invalid request body (need {\"for\":\"7d\"} or {\"until\":\"<RFC3339>\"})")
 		return
 	}
-	d, perr := parseDur(req.For)
+	expiry, perr := parseExpiry(req.For, req.Until, "for", "until")
 	if perr != nil {
-		writeErr(w, http.StatusBadRequest, "invalid_name", "invalid for: "+perr.Error())
+		writeErr(w, http.StatusBadRequest, "invalid_request", perr.Error())
 		return
 	}
 	var info workspace.Info
 	opID, err := s.track("lease", name, func() error {
-		if _, e := s.mgr.Lease(r.Context(), name, d); e != nil {
+		if _, e := s.mgr.LeaseUntil(r.Context(), name, expiry); e != nil {
 			return e
 		}
 		var e error

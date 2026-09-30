@@ -748,10 +748,23 @@ func (m *Manager) Lease(ctx context.Context, name string, d time.Duration) (time
 	if d <= 0 {
 		return time.Time{}, fmt.Errorf("lease duration must be > 0")
 	}
+	return m.LeaseUntil(ctx, name, time.Now().UTC().Add(d))
+}
+
+// LeaseUntil は expires_at を**絶対時刻で**設定する(#381)。
+//
+// 相対期間から換算せず受け取るのは、他システムと寿命を揃えるため。呼び出し側が
+// 「今から d 後」を計算して渡す形だと、計算した時刻とここで now を取る時刻の
+// ずれがそのまま期限のずれになり、同じ期限を狙って別々のシステムへ指示しても
+// 揃わない。絶対時刻ならどこで何回処理しても同じ値になる。
+func (m *Manager) LeaseUntil(ctx context.Context, name string, exp time.Time) (time.Time, error) {
+	exp = exp.UTC()
+	if !exp.After(time.Now().UTC()) {
+		return time.Time{}, fmt.Errorf("expiry must be in the future")
+	}
 	if _, err := m.db.GetBranch(name); err != nil {
 		return time.Time{}, err
 	}
-	exp := time.Now().UTC().Add(d)
 	if err := m.db.SetExpiresAt(name, exp); err != nil {
 		return time.Time{}, err
 	}
