@@ -24,7 +24,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 | コマンド | 何をするか |
 |---|---|
 | `create <name>` | 作る。`--wait`(既定)/ `--no-wait` / `--exist-ok`(既にあれば既存を返す)/ `--profile P` / `--ttl D` \| `--expires-at <RFC3339>`(排他)/ `--port N` / `--baseline <snapshot>` / `--owner O` / `--purpose P` / `--source <json>` |
-| `list` / `show <name>` | 一覧 / 詳細。`show` は `stale`(origin が current baseline より古い)と `baseline:`(promote 元)も出す |
+| `list [--all-hosts]` / `show <name>` | 一覧 / 詳細。`--all-hosts` は hosts.yaml の全ホストを並べる。`show` は `stale`(origin が current baseline より古い)と `baseline:`(promote 元)も出す |
 | `env <name>` | `DB_HOST=` / `DB_PORT=` / `DB_USER=` を出す(dotenv)。`--prefix P` で接頭辞を変える。パスワードと内部ポートは出さない |
 | `connect <name>` | engine に合わせたクライアント(`mysql` / `psql`)を exec する。パスワードは `SASHIKI_DB_PASSWORD`(無ければクライアントが尋ねる)、接続先は API の host(`SASHIKI_DB_HOST` で上書き可)。Postgres は `SASHIKI_DB_NAME`(既定 `postgres`)に繋ぐ |
 | `reset <name>` | 作成時点(`@init`)に戻す |
@@ -59,10 +59,33 @@ config と state.db を直接触る(sashikid 経由ではない)。
 | `init` | ホストを構成する。`--pool <p>` / `--device <dev>` / `--engine mysql\|postgres` / `--app-pass <pw>`(省略時: Linux はランダム生成、darwin は `dev`。config が既にあると無視される)/ `--platform darwin`(既定は実行中の OS)/ `--root <dir>`(darwin)/ `--skip-packages`(apt を触らない。Linux の導入は `mysql-server-8.0` 固定で、mysqld が既にあれば自動で飛ばす。8.4 / 26.7 は先に入れておく)/ `--yes`(`-y`) |
 | `token create --name <n> [--scope branches\|admin]` / `token list` / `token revoke <n>` | API トークン。既定 scope は `branches`。`--config <path>` で config を指定 |
 | `op list` / `op show <id>` / `op wait <id>` | operation(直近 50 件) |
-| `capacity` / `doctor` | 容量とヘルスチェック(読み取りのみ)。`doctor` は問題があると終了コード 1 |
+| `capacity [--all-hosts]` / `doctor` | 容量とヘルスチェック(読み取りのみ)。`--all-hosts` はどのホストに空きがあるかを 1 コマンドで見る。`doctor` は問題があると終了コード 1 |
 | `gc --orphans` | state.db に無い dataset を消す |
 | `drain [--json]` | 全ブランチを安全に停止する(メンテ前) |
 | `version` | 版を出す |
+
+### 複数ホスト(hosts.yaml、#386)
+
+`~/.config/sashiki/hosts.yaml` に複数の sashikid を登録し、`--host <name>`(全コマンド)か
+`SASHIKI_HOST` で選ぶ。`list` / `capacity` は `--all-hosts` で全ホストへ問い合わせ、
+`HOST` 列(応答の `host_name`、無ければ hosts.yaml のキー)を付けて並べる。
+届かなかったホストは warning で明示する(部分結果を黙って全体として見せない)。
+**fan-out は読み取りだけ** — 変更操作に `--all-hosts` は無い(一括削除の口を作らない)。
+
+```yaml
+default: dev-mysql
+hosts:
+  dev-mysql:
+    url: https://dev-mysql.internal:8080
+    token_file: ~/.config/sashiki/tokens/dev-mysql   # token / token_env / token_file の 3 口
+  stg-pg:
+    url: https://stg-pg.internal:8080
+    token_env: SASHIKI_TOKEN_STG
+```
+
+接続先の優先順位: `--host` / `SASHIKI_HOST` > `SASHIKI_API_URL`(既存の挙動のまま)>
+hosts.yaml の `default` > `http://127.0.0.1:8080`。`token_env` の参照先が空のときは
+エラーにする(平文 `token` へは落ちない。config の `app_pass` と同じ判断)。
 
 環境変数: `SASHIKI_API_URL` / `SASHIKI_API_TOKEN`(または `~/.config/sashiki/token`)/
 `SASHIKI_CONFIG`(config の場所を上書き)/ `SASHIKI_DB_HOST` / `SASHIKI_DB_PASSWORD` / `SASHIKI_DB_NAME`(`connect` 用)。

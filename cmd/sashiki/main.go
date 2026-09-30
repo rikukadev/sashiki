@@ -44,7 +44,7 @@ func usage() int {
   sashiki wake   <name> [--json]
   sashiki lease renew <name> (--for <dur> | --until <RFC3339>)   (例 7d, 1h / 2026-10-01T10:00:00Z)
   sashiki hooks run <name> <event>
-  sashiki list   [--json]
+  sashiki list   [--json] [--all-hosts]
   sashiki show   <name> [--json]
   sashiki connect <name>
   sashiki env    <name> [--prefix P]        接続情報を KEY=VALUE で出す
@@ -53,7 +53,7 @@ func usage() int {
   sashiki baseline import|list|refresh|promote|set|delete|build|validate|publish|gc   (詳細は sashiki baseline)
   sashiki token create|list|revoke
   sashiki op list | show <id> | wait <id>
-  sashiki capacity [--json]
+  sashiki capacity [--json] [--all-hosts]
   sashiki doctor [--json]
   sashiki gc --orphans
   sashiki drain
@@ -63,6 +63,10 @@ func usage() int {
   baseline refresh は開始だけ返す(進捗は sashiki baseline list)。baseline promote は同期。
   --no-wait で待たずに operation を返す / --timeout <dur> / --interval <dur> で待機を調整。
 
+接続先は --host <name> / SASHIKI_HOST で ~/.config/sashiki/hosts.yaml から選べる。
+  未指定なら SASHIKI_API_URL、次に hosts.yaml の default、最後に http://127.0.0.1:8080。
+  --all-hosts(list / capacity)は hosts.yaml の全ホストへ問い合わせて並べる。
+
 終了コード: 0=成功 1=エラー 2=使い方 3=不在(404) 4=競合(409) 5=容量不足(507) 6=待機タイムアウト。
 コマンド・API・config の一覧は docs/REFERENCE.md。
 `)
@@ -70,6 +74,25 @@ func usage() int {
 }
 
 func run(args []string) int {
+	// --host はグローバルフラグ(#386)。各コマンドの parseArgs(未知フラグを
+	// エラーにする)より先に取り除く。
+	args, hostName, err := extractHostFlag(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitUsage
+	}
+	if hostName == "" {
+		hostName = os.Getenv("SASHIKI_HOST")
+	}
+	if hostName != "" {
+		if err := selectHost(hostName); err != nil {
+			fmt.Fprintln(os.Stderr, "sashiki:", err)
+			return exitUsage
+		}
+	} else if err := selectDefaultHost(); err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitUsage
+	}
 	if len(args) < 1 {
 		return usage()
 	}
@@ -128,15 +151,30 @@ func run(args []string) int {
 // --- API client ---
 
 func apiURL() string {
+	// 優先順位(#386): 名前で明示した接続先(--host / SASHIKI_HOST)>
+	// SASHIKI_API_URL > hosts.yaml の default > 既定。判定を参照時に行うのは、
+	// 設定時(run 冒頭)に固定すると後から変わった環境変数に勝ててしまうため。
+	if selectedHost.explicit {
+		return selectedHost.url
+	}
 	if v := os.Getenv("SASHIKI_API_URL"); v != "" {
 		return v
+	}
+	if selectedHost.url != "" {
+		return selectedHost.url
 	}
 	return "http://127.0.0.1:8080"
 }
 
 func apiToken() string {
+	if selectedHost.explicit && selectedHost.token != "" {
+		return selectedHost.token
+	}
 	if v := os.Getenv("SASHIKI_API_TOKEN"); v != "" {
 		return v
+	}
+	if selectedHost.token != "" {
+		return selectedHost.token
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -150,6 +188,12 @@ func apiToken() string {
 }
 
 func call(method, path string, body any) (int, []byte, error) {
+	return callWith(apiURL(), apiToken(), method, path, body)
+}
+
+// callWith は接続先を明示して叩く。fan-out(--all-hosts、#386)が複数ホストへ
+// 同じリクエストを投げるのに使う。
+func callWith(baseURL, token, method, path string, body any) (int, []byte, error) {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -158,13 +202,13 @@ func call(method, path string, body any) (int, []byte, error) {
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, apiURL()+path, rd)
+	req, err := http.NewRequest(method, baseURL+path, rd)
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if t := apiToken(); t != "" {
-		req.Header.Set("Authorization", "Bearer "+t)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	client := &http.Client{Timeout: httpTimeout()} // create/reset はストレージ次第で長い
 	resp, err := client.Do(req)
@@ -552,13 +596,17 @@ func cmdSimpleBranch(args []string, action string) int {
 }
 
 func cmdList(args []string) int {
-	pos, jsonOut, err := parseFlags(args)
+	pos, opts, err := parseArgs(args, nil, []string{"--json", "--all-hosts"})
 	if err != nil {
 		return argError("list", err)
 	}
+	jsonOut := opts["--json"] == "true"
 	if len(pos) > 0 {
 		fmt.Fprintf(os.Stderr, "sashiki list: 余分な引数 %v(ブランチ 1 件は sashiki show <name>)\n", pos)
 		return exitUsage
+	}
+	if opts["--all-hosts"] == "true" {
+		return listAllHosts(jsonOut)
 	}
 	code, data, err := call("GET", "/v1/branches", nil)
 	if err != nil {
@@ -603,6 +651,62 @@ func cmdList(args []string) int {
 	if len(backing) > 0 {
 		fmt.Printf("\n! baseline の実体を保持(promote 元。reset / recreate / delete 不可): %s\n", strings.Join(backing, ", "))
 	}
+	return exitOK
+}
+
+// listAllHosts は hosts.yaml の全ホストから一覧を集めて HOST 列付きで出す(#386)。
+// ホスト名は応答の host_name(#383)を優先し、無ければ hosts.yaml のキー。
+func listAllHosts(jsonOut bool) int {
+	results, err := fanOut("/v1/branches")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitUsage
+	}
+	type hostBranches struct {
+		Host     string       `json:"host"`
+		HostName string       `json:"host_name,omitempty"`
+		Branches []branchView `json:"branches"`
+	}
+	var merged []hostBranches
+	for _, r := range results {
+		if r.Err != nil || r.Code != http.StatusOK {
+			continue
+		}
+		var resp struct {
+			HostName string       `json:"host_name"`
+			Branches []branchView `json:"branches"`
+		}
+		if uerr := json.Unmarshal(r.Data, &resp); uerr != nil {
+			r.Err = uerr
+			continue
+		}
+		merged = append(merged, hostBranches{Host: r.Name, HostName: resp.HostName, Branches: resp.Branches})
+	}
+	allFailed := reportPartialFailure(results)
+	if allFailed {
+		return exitError
+	}
+	if jsonOut {
+		b, _ := json.Marshal(map[string]any{"hosts": merged})
+		fmt.Println(string(b))
+		return exitOK
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "HOST\tNAME\tPORT\tSTATE\tLAST_CONN\tUSED")
+	for _, h := range merged {
+		label := h.HostName
+		if label == "" {
+			label = h.Host
+		}
+		for _, b := range h.Branches {
+			last := "-"
+			if b.LastConnAt != nil {
+				last = *b.LastConnAt
+			}
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\t%s\n", label, b.Name, b.Port, b.State, last, humanBytes(b.UsedBytes))
+		}
+	}
+	_ = tw.Flush()
 	return exitOK
 }
 
