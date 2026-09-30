@@ -75,10 +75,17 @@ type Server struct {
 	// trustLoopback が true(既定)なら loopback を無認証で通す。false なら
 	// loopback でも Bearer トークン必須(リバプロ公開時の素通し防止、#198)。
 	trustLoopback bool
+	// hostName はこのホストの識別名(config の name、#383)。healthz / capacity /
+	// branches の応答に host_name として含め、複数ホストをマージする側が
+	// どのホストの応答か区別できるようにする。空なら応答から省く。
+	hostName string
 }
 
 // SetTrustLoopback は loopback 無認証の可否を設定する(sashikid 起動時)。
 func (s *Server) SetTrustLoopback(v bool) { s.trustLoopback = v }
+
+// SetHostName はこのホストの識別名を設定する(sashikid 起動時、#383)。
+func (s *Server) SetHostName(name string) { s.hostName = name }
 
 // SetProxyListen は固定エンドポイントの listen アドレス("0.0.0.0:3306" 等)を
 // 渡して、接続情報に載せるポートを決める(sashikid 起動時)。空文字なら proxy
@@ -442,6 +449,17 @@ func (s *Server) handleGCBaselines(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": res.Deleted, "kept": res.Kept, "dry_run": gc.DryRun})
 }
 
+// withHostName は応答のトップレベルに host_name を足す(#383)。config の name が
+// 空なら何も足さない(1 台構成の既存利用者には応答が変わらない)。
+// キーを name ではなく host_name にするのは、/v1/branches の要素の name
+// (ブランチ名)と紛れないようにするため。
+func (s *Server) withHostName(m map[string]any) map[string]any {
+	if s.hostName != "" {
+		m["host_name"] = s.hostName
+	}
+	return m
+}
+
 func (s *Server) handleCapacity(w http.ResponseWriter, r *http.Request) {
 	c, err := s.mgr.Capacity(r.Context())
 	if err != nil {
@@ -458,7 +476,7 @@ func (s *Server) handleCapacity(w http.ResponseWriter, r *http.Request) {
 	if memAvail <= 0 {
 		memAvail = -1
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, http.StatusOK, s.withHostName(map[string]any{
 		"storage": map[string]any{
 			"introspectable":     c.StorageIntrospectable,
 			"pool_used_bytes":    poolUsed,
@@ -470,7 +488,7 @@ func (s *Server) handleCapacity(w http.ResponseWriter, r *http.Request) {
 		"ports":    map[string]any{"used": c.PortsUsed, "total": c.PortsTotal},
 		"memory":   map[string]any{"available_bytes": memAvail, "expected_rss_bytes": c.ExpectedRSSBytes},
 		"branches": map[string]any{"running": c.Running, "max_running": c.MaxRunning, "max_branches": c.MaxBranches},
-	})
+	}))
 }
 
 func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
@@ -532,7 +550,9 @@ func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	// host_name は識別子であって秘密ではないので、認証の外にある healthz に
+	// 含めてよい(#383)。監視が「どのホストの ok か」を区別できる。
+	writeJSON(w, http.StatusOK, s.withHostName(map[string]any{"status": "ok"}))
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
@@ -545,7 +565,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	for _, i := range infos {
 		out = append(out, s.toJSON(i))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"branches": out})
+	writeJSON(w, http.StatusOK, s.withHostName(map[string]any{"branches": out}))
 }
 
 type createReq struct {

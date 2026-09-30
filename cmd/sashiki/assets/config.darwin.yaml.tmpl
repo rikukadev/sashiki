@@ -1,5 +1,9 @@
 # sashiki(macOS ネイティブ, VM レス)。sashiki init --platform darwin が生成。
 # storage=apfs(clonefile), engine=process(mysqld 直起動)。
+# 複数ホストを並べたとき、マージする側(ポータル / CLI / 監視)がどのホストの
+# 応答か区別するための識別名(#383)。API の応答に host_name として含まれる。
+name: {{.HostName}}
+
 listen:
   api: "127.0.0.1:8080"     # Web UI もここ (GET /)
   proxy: "127.0.0.1:3306"

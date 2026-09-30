@@ -243,6 +243,7 @@ resource "aws_instance" "this" {
   }
 
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
+    name                 = var.name
     data_device          = var.data_device_name
     data_volume_id       = aws_ebs_volume.data.id
     pool                 = "tank"

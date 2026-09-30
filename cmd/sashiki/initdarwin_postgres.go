@@ -137,7 +137,8 @@ func cmdInitDarwinPostgres(opts initOpts) int {
 			done: func() bool { _, err := os.Stat(configPath); return err == nil },
 			run: func() error {
 				data, err := renderTmpl(configDarwinPostgresTmpl,
-					map[string]string{"Root": root, "PgBinDir": binDir, "AppPass": yamlQuote(appPass)})
+					map[string]string{"Root": root, "PgBinDir": binDir, "AppPass": yamlQuote(appPass),
+						"HostName": defaultHostName()})
 				if err != nil {
 					return err
 				}

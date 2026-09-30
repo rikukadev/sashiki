@@ -1,6 +1,10 @@
 # sashiki(macOS ネイティブ, VM レス / PostgreSQL)。
 # sashiki init --platform darwin --engine postgres が生成。
 # storage=apfs(clonefile), engine=process(postgres 直起動 / systemd 不要)。
+# 複数ホストを並べたとき、マージする側がどのホストの応答か区別するための
+# 識別名(#383)。API の応答に host_name として含まれる。
+name: {{.HostName}}
+
 listen:
   # MySQL 版(8080 / 9100)と同時に常駐できるよう 1 つずらす(#304)。
   # CLI は SASHIKI_API_URL=http://127.0.0.1:8081 で向ける。
