@@ -147,6 +147,12 @@ allowlist ヘルパーで、手で使うものではない。config の `root_he
 | `GET /v1/healthz` | 200 | 認証不要 |
 | `GET /` | 200 | Web UI(HTML。データは API を叩いて取る) |
 
+ブランチの接続情報は `host` / `port` / `user` の 3 つ組と、それを URI にした `uri`
+(例 `mysql://dev%40pr-42@sashiki.local:3306/`)。**proxy 有効時の `user` は
+`dev@<branch>` で `@` を含む**ので、自分で `user@host` と連結すると `@` が 2 個になり
+ホストを取り違える。URI が要るときは `uri` を使う。`uri` にパスワードは入らない
+(config の `app_pass` を自分で差し込む)。
+
 エラーは `{"error": {"code": "...", "message": "..."}}`。主なコード:
 `invalid_name` `invalid_request` `query_error`(400)/ `unauthorized`(401)/
 `insufficient_scope` `cross_origin_denied` `host_mismatch`(403)/
