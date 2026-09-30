@@ -7,6 +7,16 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.14.0](https://github.com/rikukadev/sashiki/compare/v0.13.2...v0.14.0) (2026-09-30)
+
+
+### Features
+
+* **api:** config の name をホスト識別名として応答に含める ([#384](https://github.com/rikukadev/sashiki/issues/384)) ([be04d57](https://github.com/rikukadev/sashiki/commit/be04d574711539d2f80227eccf496c4308db28b6)), closes [#383](https://github.com/rikukadev/sashiki/issues/383)
+* **api:** 接続情報にエスケープ済みの uri を足す ([#380](https://github.com/rikukadev/sashiki/issues/380)) ([ed9aeb7](https://github.com/rikukadev/sashiki/commit/ed9aeb798e3615fd581576861764587ae3c13ece)), closes [#379](https://github.com/rikukadev/sashiki/issues/379)
+* **api:** 期限を絶対時刻(expires_at / until)でも指定できるようにする ([#382](https://github.com/rikukadev/sashiki/issues/382)) ([b534bd3](https://github.com/rikukadev/sashiki/commit/b534bd3e216df2accaa5f1de9c392e4e8546c5b5)), closes [#381](https://github.com/rikukadev/sashiki/issues/381)
+* **cli:** 名前付きホストと list / capacity の --all-hosts を足す ([#387](https://github.com/rikukadev/sashiki/issues/387)) ([bcc8f3f](https://github.com/rikukadev/sashiki/commit/bcc8f3f44bbddf744da4d6104d799dd9d3abca4e)), closes [#386](https://github.com/rikukadev/sashiki/issues/386)
+
 ## [0.13.2](https://github.com/rikukadev/sashiki/compare/v0.13.1...v0.13.2) (2026-09-29)
 
 
