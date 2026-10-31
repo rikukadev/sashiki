@@ -7,6 +7,18 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.15.0](https://github.com/rikukadev/sashiki/compare/v0.14.0...v0.15.0) (2026-10-31)
+
+
+### Features
+
+* **cli:** env に接続文字列と dotenv への書き出しを足す ([#391](https://github.com/rikukadev/sashiki/issues/391)) ([6a65db2](https://github.com/rikukadev/sashiki/commit/6a65db2b53ca0e25625296169ec7bc7b66b84d76))
+
+
+### Bug Fixes
+
+* **security:** Go と x/text を上げ、期限切れになったテストを直す ([#392](https://github.com/rikukadev/sashiki/issues/392)) ([f6d16ec](https://github.com/rikukadev/sashiki/commit/f6d16ec23c1436a88eca5d5709def57a4a557955))
+
 ## [0.14.0](https://github.com/rikukadev/sashiki/compare/v0.13.2...v0.14.0) (2026-09-30)
 
 
