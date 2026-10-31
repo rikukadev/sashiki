@@ -36,11 +36,16 @@ func TestCmdEnvURL(t *testing.T) {
 		}
 	})
 
-	t.Run("SASHIKI_DB_HOST で host を上書きできる", func(t *testing.T) {
+	// DB_HOST と URL の host は同じ値にする。片方だけ上書きされると、同じ .env に
+	// 繋がる値と繋がらない値が並ぶ。
+	t.Run("SASHIKI_DB_HOST は DB_HOST と URL の両方に効く", func(t *testing.T) {
 		t.Setenv("SASHIKI_DB_HOST", "127.0.0.1")
 		out := captureStdout(t, func() { _ = cmdEnv([]string{"pr-42", "--url-var", "DATABASE_URL"}) })
+		if !strings.Contains(out, "DB_HOST=127.0.0.1\n") {
+			t.Errorf("DB_HOST が上書きされていない:\n%s", out)
+		}
 		if !strings.Contains(out, "@127.0.0.1:3306") {
-			t.Errorf("host が上書きされていない:\n%s", out)
+			t.Errorf("URL の host が上書きされていない:\n%s", out)
 		}
 	})
 
@@ -83,7 +88,7 @@ func TestCmdEnvWrite(t *testing.T) {
 		got, _ := os.ReadFile(path)
 		want := "# 手で書いた設定\nAPI_KEY=abc\n" +
 			"DATABASE_URL=mysql://dev%40pr-42:s3cret@127.0.0.1:3306/app\nDB_PORT=3306\n" +
-			"DB_HOST=sashiki.internal\nDB_USER=dev@pr-42\n"
+			"DB_HOST=127.0.0.1\nDB_USER=dev@pr-42\n"
 		if string(got) != want {
 			t.Errorf("ファイル =\n%s\nwant\n%s", got, want)
 		}

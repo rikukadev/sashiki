@@ -34,6 +34,17 @@ func connURL(b branchView, db string, withPassword bool) string {
 	return u.String()
 }
 
+// envHost は env が出す HOST。SASHIKI_DB_HOST があればそれ、無ければ API の値を
+// 解釈せずに出す(#260)。URL の host(connectHost)と食い違うと、同じ .env に
+// 繋がる値と繋がらない値が並ぶので、上書きは両方に効かせる。
+// connectHost と違い、API の値が空でも 127.0.0.1 で埋めない(上書きしない人の出力を変えない)。
+func envHost(b branchView) string {
+	if h := os.Getenv("SASHIKI_DB_HOST"); h != "" {
+		return h
+	}
+	return b.Host
+}
+
 // dbNameFor は URL に入れるデータベース名。--db、SASHIKI_DB_NAME の順に見る。
 // どちらも無ければ、postgres は必ず存在する postgres、mysql は指定なし。
 func dbNameFor(b branchView, flag string) string {
@@ -111,7 +122,7 @@ func writeDotenv(path string, kvs []kv) error {
 func emitEnv(b branchView, prefix, urlVar, db, write string) error {
 	withPassword := write != ""
 	kvs := []kv{
-		{prefix + "HOST", b.Host},
+		{prefix + "HOST", envHost(b)},
 		{prefix + "PORT", strconv.Itoa(b.Port)},
 		{prefix + "USER", b.User},
 	}
