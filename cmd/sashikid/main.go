@@ -349,6 +349,7 @@ func main() {
 				AllowedUser:      allowedUser,
 				AppUser:          cfg.AppUser(),
 				AppPassword:      cfg.AppPass(),
+				PassthroughUsers: cfg.Proxy.PassthroughUsers,
 				TLSConfig:        tlsCfg,
 			}, mgr)
 			if err != nil {

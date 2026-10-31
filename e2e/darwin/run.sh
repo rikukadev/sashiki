@@ -48,6 +48,11 @@ trap cleanup EXIT
 log "temp root: $ROOT"
 mkdir -p "$ROOT/log" "$ROOT/run" "$ROOT/hooks"
 
+# proxy を TLS 終端にして、クライアント TLS × backend 平文の経路(#394 の RSA 詰め替え)も通す。
+# 平文接続は引き続き受けるので、既存の検査は --ssl-mode=DISABLED を明示して平文経路に固定する
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=localhost" \
+  -keyout "$ROOT/proxy.key" -out "$ROOT/proxy.crt" >/dev/null 2>&1 || fail "openssl で自己署名証明書を作れない"
+
 cat > "$ROOT/config.yaml" <<YAML
 listen:
   api: "127.0.0.1:$API_PORT"
@@ -70,6 +75,10 @@ engine:
     port_range: [13401, 13600]
     app_user: dev
     app_pass: dev
+proxy:
+  passthrough_users: [photo_app]   # #394: ブランチ内ユーザーの認証中継
+  tls_cert: $ROOT/proxy.crt
+  tls_key: $ROOT/proxy.key
 branches:
   name_pattern: "^[a-z0-9-]{1,32}$"
   max_branches: 20
@@ -84,6 +93,11 @@ CREATE DATABASE IF NOT EXISTS app;
 USE app;
 CREATE TABLE items (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64));
 INSERT INTO items (name) VALUES ('alpha'), ('beta'), ('gamma');
+CREATE DATABASE IF NOT EXISTS other;
+CREATE TABLE other.secrets (id INT PRIMARY KEY);
+-- #394: サービス別ユーザー(GRANT は app.* の SELECT だけ)。proxy は認証を backend に委ねる
+CREATE USER 'photo_app'@'%' IDENTIFIED BY 'photo-secret';
+GRANT SELECT ON app.* TO 'photo_app'@'%';
 SQL
 
 log "baseline import (non-root, apfs, clonefile)"
@@ -110,7 +124,46 @@ log "break -> reset -> データ復元"
 log "proxy lazy create (未知ブランチへ接続だけで自動作成)"
 [ "$(q pr-lazy 'SELECT COUNT(*) FROM app.items;')" = "3" ] || fail "lazy create が効かない"
 
+log "proxy passthrough: ブランチ内ユーザー photo_app で接続 (#394)"
+# 期待どおりのエラー(1142/1045/1049)でも mysql は非ゼロで終わる。set -e / pipefail に
+# 拾わせず出力だけを返す(判定は呼び出し側の grep で行う)
+pt() { "$MYSQL" -uphoto_app@"$1" -p"$2" -h127.0.0.1 -P"$PROXY_PORT" --ssl-mode=DISABLED --get-server-public-key -N -e "$3" 2>&1 | grep -v "Using a password"; return 0; }
+# TLS 終端あり: クライアントは平文パスワードを送り、proxy が backend(平文)向けに RSA へ詰め替える
+ptls() { "$MYSQL" -uphoto_app@"$1" -p"$2" -h127.0.0.1 -P"$PROXY_PORT" --ssl-mode=REQUIRED -N -e "$3" 2>&1 | grep -v "Using a password"; return 0; }
+# 初回はキャッシュが冷えていて full auth → RSA 公開鍵の中継(--get-server-public-key)
+[ "$(pt pr-1 photo-secret 'SELECT COUNT(*) FROM app.items;')" = "3" ] || fail "passthrough: photo_app@pr-1 で読めるはず"
+# 2 回目はキャッシュが温まっていて fast auth → フラグなしで通る
+[ "$("$MYSQL" -uphoto_app@pr-1 -pphoto-secret -h127.0.0.1 -P"$PROXY_PORT" --ssl-mode=DISABLED -N -e 'SELECT COUNT(*) FROM app.items;' 2>/dev/null)" = "3" ] || fail "passthrough: 2 回目はフラグなしで通るはず"
+# GRANT はそのユーザーのまま(app_user に化けていない)
+out=$(pt pr-1 photo-secret 'SELECT COUNT(*) FROM other.secrets;'); grep -q "1142" <<<"$out" || fail "passthrough: GRANT 分離が保たれるはず(other.* は 1142): $out"
+# 誤パスワードは backend が拒否する
+out=$(pt pr-1 WRONG 'SELECT 1;'); grep -q "1045" <<<"$out" || fail "passthrough: 誤パスワードは 1045 のはず: $out"
+# 未知ブランチは lazy create しない(lazy_create: true でも)
+out=$(pt no-such photo-secret 'SELECT 1;'); grep -q "1049" <<<"$out" || fail "passthrough: 未知ブランチは Unknown branch のはず: $out"
+"$SASHIKI_BIN" list 2>/dev/null | grep -q "no-such" && fail "passthrough: 未知ブランチを作ってはいけない"
+# 列挙外のユーザーは入口で拒否
+out=$("$MYSQL" -ugear_app@pr-1 -px -h127.0.0.1 -P"$PROXY_PORT" -e 'SELECT 1' 2>&1 || true); grep -q "1045" <<<"$out" || fail "passthrough: 列挙外ユーザーは拒否のはず: $out"
+# sleeping からの起床が proxy 経由で効く(直結では効かなかった、issue の動機)
+"$SASHIKI_BIN" sleep pr-1 || fail "sleep pr-1"
+[ "$(pt pr-1 photo-secret 'SELECT COUNT(*) FROM app.items;')" = "3" ] || fail "passthrough: sleeping からの起床が効くはず"
+
+log "proxy passthrough: TLS 終端 × full auth (#394 の RSA 詰め替え経路)"
+# pr-tls は新しい mysqld なので photo_app のキャッシュは冷えている → backend は full auth を要求する。
+# クライアントは TLS なので --get-server-public-key なしで平文パスワードを送り、proxy が RSA に詰め替える
+"$SASHIKI_BIN" create pr-tls || fail "create pr-tls"
+[ "$(ptls pr-tls photo-secret 'SELECT COUNT(*) FROM app.items;')" = "3" ] || fail "passthrough(TLS): 冷えたキャッシュでフラグなしで通るはず"
+# 本当に TLS だったか(平文なら Ssl_cipher は空)
+out=$("$MYSQL" -uphoto_app@pr-tls -pphoto-secret -h127.0.0.1 -P"$PROXY_PORT" --ssl-mode=REQUIRED -e '\s' 2>/dev/null | grep -i '^SSL:' || true)
+grep -q "Cipher in use" <<<"$out" || fail "passthrough(TLS): クライアント側が TLS で接続しているはず: $out"
+# 誤パスワードは TLS 経由でも backend の 1045(詰め替え後に backend が判定する)
+"$SASHIKI_BIN" create pr-tls2 || fail "create pr-tls2"
+out=$(ptls pr-tls2 WRONG 'SELECT 1;'); grep -q "1045" <<<"$out" || fail "passthrough(TLS): 誤パスワードは 1045 のはず: $out"
+# 方式A(dev)も TLS で従来どおり
+[ "$("$MYSQL" -udev@pr-tls -pdev -h127.0.0.1 -P"$PROXY_PORT" --ssl-mode=REQUIRED -N -e 'SELECT COUNT(*) FROM app.items;' 2>/dev/null)" = "3" ] || fail "方式A が TLS で通るはず"
+
 log "delete"
+"$SASHIKI_BIN" delete pr-tls || fail "delete pr-tls"
+"$SASHIKI_BIN" delete pr-tls2 || fail "delete pr-tls2"
 "$SASHIKI_BIN" delete pr-1 || fail "delete pr-1"
 "$SASHIKI_BIN" delete pr-lazy || fail "delete pr-lazy"
 

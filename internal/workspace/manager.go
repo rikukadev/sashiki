@@ -774,6 +774,18 @@ func (m *Manager) LeaseUntil(ctx context.Context, name string, exp time.Time) (t
 // RouteBranch はプロキシ用: ブランチのポートを返す。
 // 未知の名前は lazy create(有効時)、sleeping は wake する。
 // 接続を保持したまま待たせる前提なので、作成完了までブロックする。
+// RouteExistingBranch は既存ブランチだけを解決する(sleeping なら wake、
+// creating/resetting なら完了待ち)。未知の名前は lazy create せずエラー。
+// proxy の認証中継(passthrough、#394)が使う: 認証をバックエンドに委ねる経路では
+// 認証前にブランチを作らせない(ADR-007 の線)。
+func (m *Manager) RouteExistingBranch(ctx context.Context, name string) (int, error) {
+	b, err := m.db.GetBranch(name)
+	if err != nil {
+		return 0, err
+	}
+	return m.routeExisting(ctx, b)
+}
+
 func (m *Manager) RouteBranch(ctx context.Context, name string) (int, error) {
 	b, err := m.db.GetBranch(name)
 	if errors.Is(err, ErrNotFound) {

@@ -14,6 +14,10 @@ type gateRouter struct {
 	calls atomic.Int32
 }
 
+func (r *gateRouter) RouteExistingBranch(ctx context.Context, name string) (int, error) {
+	return r.RouteBranch(ctx, name)
+}
+
 func (r *gateRouter) RouteBranch(ctx context.Context, name string) (int, error) {
 	r.calls.Add(1)
 	select {

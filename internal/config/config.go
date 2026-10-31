@@ -26,8 +26,8 @@ type Config struct {
 	// 各ホストは自分が複数台のうちの 1 台であることを知らなくてよい。
 	// Domain(接続先)と分けるのは、接続情報と表示ラベルの二役を 1 つのフィールドに
 	// 負わせない(mDNS 名や共有ドメインは人に見せる名前にならない)ため。空なら省略。
-	Name   string `yaml:"name"`
-	Domain string `yaml:"domain"`
+	Name      string `yaml:"name"`
+	Domain    string `yaml:"domain"`
 	StateDB   string `yaml:"state_db"`
 	RunDir    string `yaml:"run_dir"`    // 実行時の一時領域(socket / sentinel)。既定 /run/sashiki(仕様 21章)
 	LogDir    string `yaml:"log_dir"`    // ログ出力の基点。既定 /var/log/sashiki(仕様 21章)
@@ -176,6 +176,12 @@ type Proxy struct {
 	// app_user のみ許可(既定)。空文字 "" を明示すると任意のユーザー名を許可する
 	// (管理ユーザーで接続したい場合など、#131)。特定名を入れればその名前だけ許可。
 	AllowedUser *string `yaml:"allowed_user"`
+	// PassthroughUsers は認証をブランチ内の mysqld に委ねる user 名(#394)。
+	// サービスごとに DB ユーザーと GRANT を分けている利用者が、そのユーザーのまま
+	// proxy を通って(= 起床も効く)繋ぐための口。sashiki はこれらのパスワードを
+	// 持たないので方式A の検証はせず、**既存ブランチに限って**バックエンドの認証を
+	// 中継する(lazy create はしない)。allowed_user とは独立に許可される。
+	PassthroughUsers []string `yaml:"passthrough_users"`
 }
 
 // Branches はブランチのポリシー。

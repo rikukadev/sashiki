@@ -314,6 +314,51 @@ func parseBackendHandshake(body []byte) (salt []byte, caps uint32, err error) {
 	return salt, caps, nil
 }
 
+// parseBackendPlugin はバックエンドのハンドシェイクが名乗る認証プラグイン名を取る
+// (passthrough、#394: クライアントへ同じ plugin で AuthSwitch を提示するため)。
+// 読めなければ空文字。
+func parseBackendPlugin(body []byte) string {
+	if len(body) < 1 || body[0] != 10 {
+		return ""
+	}
+	pos := 1
+	for pos < len(body) && body[pos] != 0 { // server version
+		pos++
+	}
+	pos += 1 + 4 + 8 + 1 + 2 // null, thread id, salt1, filler, caps low
+	if pos+1+2+2+1+10 > len(body) {
+		return ""
+	}
+	pos += 1 + 2 + 2 // charset, status, caps high
+	authLen := int(body[pos])
+	pos += 1 + 10 // auth len, reserved
+	part2 := authLen - 8
+	if part2 < 13 {
+		part2 = 13
+	}
+	pos += part2
+	if pos >= len(body) {
+		return ""
+	}
+	end := pos
+	for end < len(body) && body[end] != 0 {
+		end++
+	}
+	return string(body[pos:end])
+}
+
+// buildAuthSwitchRequest はクライアントへ送る AuthSwitchRequest
+// (0xfe + plugin\0 + salt\0)。passthrough(#394)で、バックエンドの salt に対して
+// 改めてスクランブルさせるのに使う。
+func buildAuthSwitchRequest(plugin string, salt []byte) []byte {
+	b := []byte{0xfe}
+	b = append(b, []byte(plugin)...)
+	b = append(b, 0)
+	b = append(b, salt...)
+	b = append(b, 0)
+	return b
+}
+
 // buildBackendHandshakeResponse はバックエンドへ送る HandshakeResponse41。
 // plugin にユーザーの実プラグインと異なる名前を渡すと、バックエンドは必ず
 // AuthSwitchRequest を返す(proxy はこれを利用する)。
