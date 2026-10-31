@@ -258,6 +258,7 @@ sashiki create demo --exist-ok       # 既にあれば既存を返す(毎回走�
 sashiki list
 sashiki show demo --json
 sashiki env demo                     # DB_HOST= / DB_PORT= / DB_USER=(dotenv)
+sashiki env demo --url-var DATABASE_URL --db app --write .env.local   # 接続文字列を .env.local に書く
 sashiki reset demo
 sashiki lease renew demo --for 14d   # 期限を延ばす
 sashiki drain                        # メンテ前に全ブランチを安全停止

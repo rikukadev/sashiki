@@ -767,9 +767,15 @@ func cmdShow(args []string) int {
 // app_user のパスワードは baseline 由来のブランチ共通値。sashiki が
 // 知っている値ではあるが、ここで出すと「接続情報を表示しただけ」の
 // つもりの操作がログや CI の出力に秘密を残す。
+//
+// --url-var NAME で接続文字列(DATABASE_URL など)も出す。--write FILE を
+// 付けると標準出力ではなく dotenv ファイルに書き(同じキーの行だけ置き換える)、
+// そのときに限り、利用者が SASHIKI_DB_PASSWORD で渡したパスワードを URL に入れる。
+// worktree を作るツールの作成後 hook から、ブランチ用の接続先を .env.local に
+// 書き込むためのもの。
 func cmdEnv(args []string) int {
 	// 未知のフラグをブランチ名として API に投げない(#325: `env --foo` が 404 → 3 だった)。
-	pos, opts, err := parseArgs(args, []string{"--prefix"}, nil)
+	pos, opts, err := parseArgs(args, []string{"--prefix", "--url-var", "--db", "--write"}, nil)
 	if err != nil {
 		return argError("env", err)
 	}
@@ -791,9 +797,10 @@ func cmdEnv(args []string) int {
 		return exitError
 	}
 	// host/port/user は「そのまま繋がる 3 つ組」(#260)。解釈せずに出す。
-	fmt.Printf("%sHOST=%s\n", prefix, b.Host)
-	fmt.Printf("%sPORT=%d\n", prefix, b.Port)
-	fmt.Printf("%sUSER=%s\n", prefix, b.User)
+	if err := emitEnv(b, prefix, opts["--url-var"], opts["--db"], opts["--write"]); err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
 	return exitOK
 }
 
