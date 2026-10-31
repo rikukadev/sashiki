@@ -224,6 +224,7 @@ PGPASSWORD=dev psql -h 127.0.0.1 -p 5432 -U 'dev@pr-1' -d app   # 未作成で�
   `allowed_user: ""` は「どんな名前でも app_pass で検証して app_user として繋ぐ」であり、
   ブランチ側の GRANT 分離は効かない。passthrough は user の本人のパスワードで backend が認証し、
   GRANT もそのユーザーのものになる(#394)。
+  初回(キャッシュが冷えている)の平文接続は mysql CLI なら `--get-server-public-key` が要る(MySQL の caching_sha2 の仕様)。
   特定名だけ許可したいなら `proxy.allowed_user: <name>`。未設定なら app_user のみ。
 - **管理者権限が要る操作**(migration ツールが root など固定ユーザーで繋ぐ場合)は
   app_user では権限不足になりうる。`proxy.allowed_user: ""` にした上で baseline に
