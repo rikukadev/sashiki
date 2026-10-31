@@ -113,8 +113,11 @@ func TestParseExpiry(t *testing.T) {
 	})
 
 	t.Run("タイムゾーン付きでも同じ瞬間なら同値", func(t *testing.T) {
-		utc, err1 := parseExpiry("", "2026-10-01T10:00:00Z", "ttl", "expires_at")
-		jst, err2 := parseExpiry("", "2026-10-01T19:00:00+09:00", "ttl", "expires_at")
+		// 固定の日時にすると、その日を過ぎた時点で「未来でない」として落ちる。
+		// 今から 48 時間後の同じ瞬間を、UTC と +09:00 の 2 通りで書く。
+		at := time.Now().Add(48 * time.Hour).Truncate(time.Second)
+		utc, err1 := parseExpiry("", at.UTC().Format(time.RFC3339), "ttl", "expires_at")
+		jst, err2 := parseExpiry("", at.In(time.FixedZone("JST", 9*60*60)).Format(time.RFC3339), "ttl", "expires_at")
 		if err1 != nil || err2 != nil {
 			t.Fatalf("unexpected error: %v / %v", err1, err2)
 		}
