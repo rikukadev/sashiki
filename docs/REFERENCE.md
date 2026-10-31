@@ -25,7 +25,7 @@ config と state.db を直接触る(sashikid 経由ではない)。
 |---|---|
 | `create <name>` | 作る。`--wait`(既定)/ `--no-wait` / `--exist-ok`(既にあれば既存を返す)/ `--profile P` / `--ttl D` \| `--expires-at <RFC3339>`(排他)/ `--port N` / `--baseline <snapshot>` / `--owner O` / `--purpose P` / `--source <json>` |
 | `list [--all-hosts]` / `show <name>` | 一覧 / 詳細。`--all-hosts` は hosts.yaml の全ホストを並べる。`show` は `stale`(origin が current baseline より古い)と `baseline:`(promote 元)も出す |
-| `env <name>` | `DB_HOST=` / `DB_PORT=` / `DB_USER=` を出す(dotenv)。`--prefix P` で接頭辞を変える。パスワードと内部ポートは出さない |
+| `env <name>` | `DB_HOST=` / `DB_PORT=` / `DB_USER=` を出す(dotenv)。`--prefix P` で接頭辞を変える。`--url-var NAME` で接続文字列も出す(例 `DATABASE_URL=mysql://dev%40pr-1@127.0.0.1:3306/app`。DB 名は `--db` か `SASHIKI_DB_NAME`、host は `SASHIKI_DB_HOST` で上書きできる)。`--write FILE` で標準出力ではなく dotenv ファイルに書く(同じキーの行だけ置き換え、新規作成は 0600)。パスワードと内部ポートは出さない。例外は `--write` のときで、利用者が `SASHIKI_DB_PASSWORD` で渡したパスワードを URL に入れる |
 | `connect <name>` | engine に合わせたクライアント(`mysql` / `psql`)を exec する。パスワードは `SASHIKI_DB_PASSWORD`(無ければクライアントが尋ねる)、接続先は API の host(`SASHIKI_DB_HOST` で上書き可)。Postgres は `SASHIKI_DB_NAME`(既定 `postgres`)に繋ぐ |
 | `reset <name>` | 作成時点(`@init`)に戻す |
 | `recreate <name>` | 現在の current baseline から作り直す |
