@@ -356,6 +356,7 @@ MySQL の版は AMI の apt パッケージで決まる。未使用だった `en
 - **branch lifecycle**: create / reset / recreate / delete / retry(create / reset / recreate / wake が途中で失敗したブランチを `error` から再実行。残骸は掃除して origin から作り直す)
 - **profile / lease**: 用途ごとの idle lifecycle(preview / ci / sandbox)+ `--ttl` / `lease renew` の絶対期限
 - **proxy(:3306 固定エンドポイント)**: `mysql -udev@<branch>` でルーティング。**認証終端(方式A)**——sashiki がパスワードを検証し、**認証後に** lazy create(認証前のリソース確保を防ぐ)。TLS 終端対応(`proxy.tls_cert` と `proxy.tls_key` の両方。未設定だと `--ssl-mode=REQUIRED` のクライアントは繋がらない)
+  - **ブランチ内の別ユーザーで繋ぐ**(サービスごとに DB ユーザーと GRANT を分けている場合): `proxy.passthrough_users: [photo_app, gear_app]` に列挙した user は、sashiki が検証せず**バックエンドの mysqld に認証を委ねて中継**する(`mysql -uphoto_app@<branch> -p<そのユーザーのパスワード>`)。既存ブランチだけが対象で lazy create はしない(認証前にブランチを作らせない線は保つ)。sleeping からの起床は効く。[#394](https://github.com/rikukadev/sashiki/issues/394)
 - **アイドル管理**: 無接続で mysqld 停止(`sleeping`)、proxy 経由の再接続で起床。idle は「作成時刻と最後の接続の新しい方」から数える(作って一度も繋がなければ作成時刻から)。engine ポーリング(MySQL は `mysql` クライアント、Postgres は `psql`)で接続を追跡するので proxy を通らない直結も「使用中」と判定する。ポーリングに失敗し続けるブランチは使用中として保護され回収されない(ログに警告)。TTL / lease で自動削除
   - 起床は proxy の認証中に同期で行う(クライアントの接続は最大 60 秒待つ)。起床時にもメモリ / storage の admission が走り、足りなければ起きない。失敗理由はクライアントには `Unknown branch` としか見えないので sashikid のログを見る
 

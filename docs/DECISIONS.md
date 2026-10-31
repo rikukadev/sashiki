@@ -181,3 +181,18 @@
 **理由**: ルーティングや連合を daemon に持たせるのは「ホストを知らずに繋ぎたい」という需要が実在してからでよく、日々の CLI 運用で今すぐ痛いのは「名前で選ぶ」「横断で見る」の 2 つだけ。どちらも読み取りの範囲で完結する。
 
 **関連**: #386、ADR-013(host_name)、#354(秘密の 3 口)。
+
+## ADR-015: ブランチ内ユーザーの認証は「設定で列挙した user に限り」バックエンドへ委ねて中継する(passthrough)
+
+**背景**: 方式A(ADR-007)は sashiki が `app_pass` を持つ前提で、proxy は `app_user` の認証しか終端できない。サービスごとに DB ユーザーと GRANT を分けている利用者(greenfield の `photo_app` / `gear_app`)は、そのユーザーでは proxy を通れず、ブランチの mysqld に直結するしかなかった。直結では sleeping からの起床が効かない(#394)。`allowed_user: ""` は名前を通すだけで、検証も backend 接続も app credential で行うため GRANT の分離が消える。
+
+**決定**:
+1. `proxy.passthrough_users` に列挙した user は、方式A の検証をせず**バックエンドの mysqld に認証を委ねる**。クライアントへ backend の plugin と salt で AuthSwitchRequest を出し、以降の認証パケット(caching_sha2 の fast/full auth、AuthSwitch の連鎖)を OK / ERR まで中継する。sashiki はパスワードを知らない。
+2. この経路は**既存ブランチだけ**を解決する(`RouteExistingBranch`)。未知の名前は lazy create せずエラー。ADR-007 が方式A に寄せた理由は「認証前に lazy create させない」ことで、その線はここでも引く。
+3. sleeping ブランチの**起床は認証前に起きる**。これはこの経路の目的そのもの(直結では起こせない起床を proxy に任せる)。起床できるのはブランチ名を知っていて proxy に到達できる相手に限られ、同時試行と失敗の遅延は方式A と同じ authlimit に掛ける。
+4. `app_user` は列挙しても方式A のまま。`allowed_user` の絞りとは独立に許可する(列挙 = 許可)。
+5. クライアント側が TLS 終端・backend 側が平文の組み合わせで caching_sha2 の full auth になったときは、クライアントの平文パスワードを sashiki が RSA(backend の公開鍵)に詰め替えて渡す。平文 TCP 同士なら RSA のやり取りをそのまま中継する。
+
+**理由**: 「ユーザーごとの GRANT 分離」と「proxy による起床」を両立させる手段は、認証を backend に委ねる以外にない(sashiki が全ユーザーのパスワードを持つのは分離の意味を壊す)。一方で全面的に中継方式(ADR-006)へ戻すと DoS 構造が復活するので、**列挙した user だけ・既存ブランチだけ**に限定して、方式A を既定のまま残す。
+
+**関連**: #394、ADR-006(中継方式の経緯)、ADR-007(方式A)、rikukaInoue/greenfield#302。

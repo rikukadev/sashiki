@@ -12,6 +12,10 @@ sashiki は**非本番(開発 / CI / プレビュー)向けの、使い捨て DB
   (`require_masked`)。未マスクの baseline は publish 不可にできます。
 - プロキシ(方式A)は `<user>@<branch>` の user 部と `app_pass` で認証を終端します。
   `proxy.allowed_user` を絞る/秘密は SSM・Secrets Manager から供給する運用を推奨します。
+- `proxy.passthrough_users` に列挙した user は例外で、認証をブランチ内の mysqld に**委ねて中継**します
+  (sashiki はそのパスワードを持ちません)。この経路は既存ブランチだけを解決し lazy create はしませんが、
+  **sleeping ブランチの起床は認証前に起きます**(起床させる相手は、ブランチ名を知っていて proxy に
+  到達できる相手に限られ、authlimit の同時試行・失敗遅延が掛かります)。列挙は必要なユーザーだけに。
 
 ## 対応バージョン
 

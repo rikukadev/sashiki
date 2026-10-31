@@ -10,16 +10,26 @@ import (
 
 // recordRouter は RouteBranch の呼び出しを記録するフェイク Router。
 type recordRouter struct {
-	mu      sync.Mutex
-	routed  []string
-	touched []string
-	port    int
-	err     error
+	mu       sync.Mutex
+	routed   []string
+	existing []string
+	touched  []string
+	port     int
+	err      error
 }
 
 func (r *recordRouter) RouteBranch(_ context.Context, name string) (int, error) {
 	r.mu.Lock()
 	r.routed = append(r.routed, name)
+	r.mu.Unlock()
+	return r.port, r.err
+}
+
+// RouteExistingBranch は passthrough(#394)の経路。呼び出しを別に記録し、
+// lazy create 側(RouteBranch)が呼ばれていないことをテストで確かめられるようにする。
+func (r *recordRouter) RouteExistingBranch(_ context.Context, name string) (int, error) {
+	r.mu.Lock()
+	r.existing = append(r.existing, name)
 	r.mu.Unlock()
 	return r.port, r.err
 }

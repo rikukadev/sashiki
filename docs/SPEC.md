@@ -759,6 +759,7 @@ proxy:
   tls_cert: ""                    # tls_cert と tls_key は両方指定する
   tls_key: ""
   # allowed_user: dev             # 未設定 = app_user のみ、"" = 任意
+  # passthrough_users: [photo_app] # 認証を backend に委ねる user(既存ブランチのみ、#394)
 
 branches:
   name_pattern: "^[a-z0-9-]{1,32}$"

@@ -220,6 +220,10 @@ PGPASSWORD=dev psql -h 127.0.0.1 -p 5432 -U 'dev@pr-1' -d app   # 未作成で�
 - 既定では **app_user(既定 `dev`)のみ**が許可される。プロキシは `@<branch>` の
   branch 部でルーティングし、パスワードは `app_pass` で検証する。
 - **任意のユーザー名を許可**したいときは `proxy.allowed_user: ""`(空文字)を設定する。
+- **ブランチ内の別ユーザー(別パスワード)で繋ぎたい**ときは `proxy.passthrough_users: [photo_app, gear_app]`。
+  `allowed_user: ""` は「どんな名前でも app_pass で検証して app_user として繋ぐ」であり、
+  ブランチ側の GRANT 分離は効かない。passthrough は user の本人のパスワードで backend が認証し、
+  GRANT もそのユーザーのものになる(#394)。
   特定名だけ許可したいなら `proxy.allowed_user: <name>`。未設定なら app_user のみ。
 - **管理者権限が要る操作**(migration ツールが root など固定ユーザーで繋ぐ場合)は
   app_user では権限不足になりうる。`proxy.allowed_user: ""` にした上で baseline に

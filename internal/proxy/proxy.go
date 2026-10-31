@@ -33,6 +33,9 @@ import (
 type Router interface {
 	// RouteBranch はブランチの接続先ポートを返す。存在しなければエラー。
 	RouteBranch(ctx context.Context, name string) (port int, err error)
+	// RouteExistingBranch は既存ブランチだけを解決する(sleeping は wake、未知は
+	// エラーで lazy create しない)。認証をバックエンドに委ねる passthrough(#394)用。
+	RouteExistingBranch(ctx context.Context, name string) (port int, err error)
 	// TouchConn は最終接続時刻を記録する(まとめ書き可)。
 	TouchConn(name string)
 }
@@ -52,6 +55,12 @@ type Config struct {
 	AppUser     string
 	AppPassword string
 
+	// PassthroughUsers は認証をブランチ内の mysqld に委ねる user 名(#394)。
+	// sashiki はこれらのパスワードを持たないので方式A の検証はできない。代わりに
+	// **既存ブランチに限って**(lazy create なし)バックエンドの認証を中継する。
+	// app_user と同名は無視する(app_user は常に方式A)。
+	PassthroughUsers []string
+
 	// TLSConfig が非 nil なら TLS 終端を有効にする(クライアント↔sashiki)。
 	TLSConfig *tls.Config
 }
@@ -65,8 +74,9 @@ type Server struct {
 	limiter *authlimit.Limiter
 	connID  atomic.Uint32
 
-	mu    sync.Mutex
-	conns map[string]int
+	mu          sync.Mutex
+	conns       map[string]int
+	passthrough map[string]bool // Config.PassthroughUsers の集合(#394)
 }
 
 // New は Server を作る。
@@ -80,11 +90,17 @@ func New(cfg Config, router Router) (*Server, error) {
 	if cfg.AppUser == "" {
 		cfg.AppUser = "dev"
 	}
+	passthrough := make(map[string]bool, len(cfg.PassthroughUsers))
+	for _, u := range cfg.PassthroughUsers {
+		if u != "" && u != cfg.AppUser {
+			passthrough[u] = true
+		}
+	}
 	re, err := regexp.Compile(cfg.NamePattern)
 	if err != nil {
 		return nil, err
 	}
-	return &Server{cfg: cfg, router: router, nameRe: re, conns: map[string]int{}, limiter: authlimit.New()}, nil
+	return &Server{cfg: cfg, router: router, nameRe: re, conns: map[string]int{}, limiter: authlimit.New(), passthrough: passthrough}, nil
 }
 
 // Listen は接続を受け付ける。ctx キャンセルで停止。
@@ -218,9 +234,16 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 		return authErr(client, seq+1, 1045, "28000",
 			fmt.Sprintf("Access denied: user must be <user>@<branch> (got %q)", hr.username))
 	}
-	if s.cfg.AllowedUser != "" && user != s.cfg.AllowedUser {
+	// passthrough(#394): 設定で明示した user は方式A の検証をせず、既存ブランチに
+	// 限ってバックエンドの認証を中継する。allowed_user の絞りとは独立に許可する
+	passthrough := s.passthrough[user]
+	if s.cfg.AllowedUser != "" && user != s.cfg.AllowedUser && !passthrough {
 		return authErr(client, seq+1, 1045, "28000",
 			fmt.Sprintf("Access denied for user %q", user))
+	}
+	if passthrough {
+		_, isTLS := client.(*tls.Conn)
+		return s.authPassthrough(ctx, client, hr, seq, user, branch, isTLS)
 	}
 
 	// 3. 認証終端: app パスワードで検証する。**ここを通るまで branch に触れない**
@@ -291,6 +314,158 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	_ = client.SetDeadline(time.Time{})
 	pipe(client, backend)
 	return nil
+}
+
+// authPassthrough はブランチ内のユーザー(app_user 以外)の認証をバックエンドの
+// mysqld に委ねる(#394)。sashiki はそのパスワードを持たないので方式A の検証は
+// できない。ADR-007 が方式A に寄せた理由は「認証前に lazy create させない」こと
+// なので、この経路は **既存ブランチだけ**を解決し(未知の名前は作らない)、同時試行と
+// 失敗の遅延は方式A と同じ authlimit に掛ける。sleeping の起床は認証前に起きる——
+// 直結では起こせない起床を proxy に任せるのが、この経路の目的そのもの。
+//
+// 流れ: backend のハンドシェイクを読んで salt と plugin を得る → クライアントへ
+// AuthSwitchRequest で同じ plugin と salt を提示し、改めてスクランブルさせる →
+// それを backend への HandshakeResponse に載せる → 以降の認証パケット
+// (caching_sha2 の fast/full auth、AuthSwitch の連鎖)を OK / ERR まで双方向に中継する。
+// シーケンス番号は両側で別に数える(クライアントは sashiki のハンドシェイクから、
+// backend は自分のハンドシェイクから数えているため)。
+func (s *Server) authPassthrough(ctx context.Context, client net.Conn, hr handshakeResponse, seq byte, user, branch string, clientTLS bool) error {
+	src := authlimit.Key(client.RemoteAddr())
+	if !s.limiter.Acquire(src) {
+		return authErr(client, seq+1, 1040, "08004", "Too many concurrent authentication attempts")
+	}
+	defer s.limiter.Release(src)
+	authlimit.Sleep(ctx, s.limiter.Penalty(src))
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// 既存ブランチだけ。未知の名前はここで落ちる(lazy create しない)
+	port, err := s.router.RouteExistingBranch(ctx, branch)
+	if err != nil {
+		s.limiter.Fail(src)
+		return authErr(client, seq+1, 1049, "42000", fmt.Sprintf("Unknown branch '%s'", branch))
+	}
+	if !s.acquire(branch) {
+		return authErr(client, seq+1, 1040, "08004", "Too many connections for branch")
+	}
+	defer s.release(branch)
+
+	backend, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", s.cfg.BackendHost, port), 10*time.Second)
+	if err != nil {
+		return authErr(client, seq+1, 2003, "HY000", "backend unavailable")
+	}
+	defer func() { _ = backend.Close() }()
+	bhs, err := readPacket(backend)
+	if err != nil {
+		return authErr(client, seq+1, 2003, "HY000", "backend unavailable")
+	}
+	salt, backendCaps, err := parseBackendHandshake(bhs.body)
+	if err != nil {
+		return authErr(client, seq+1, 2003, "HY000", "backend handshake unreadable")
+	}
+	plugin := parseBackendPlugin(bhs.body)
+	if plugin == "" {
+		plugin = sha2Plugin
+	}
+
+	// クライアントに backend の salt でスクランブルし直させる
+	cseq := seq + 1
+	if err := writePacket(client, packet{seq: cseq, body: buildAuthSwitchRequest(plugin, salt)}); err != nil {
+		return err
+	}
+	cresp, err := readPacket(client)
+	if err != nil {
+		return err
+	}
+	cseq = cresp.seq
+
+	// backend へは user(@branch を除く)と、クライアントが交渉した capability で名乗る
+	// (方式A の authenticateBackend と同じ理由: DEPRECATE_EOF 等をクライアントに揃える)
+	fwd := handshakeResponse{maxLen: 16 * 1024 * 1024, charset: 0xff}
+	fwd.caps = hr.caps & synthCaps
+	if hr.database != "" {
+		fwd.caps |= capConnectWithDB
+		fwd.database = hr.database
+	} else {
+		fwd.caps &^= capConnectWithDB
+	}
+	bseq := bhs.seq + 1
+	if err := writePacket(backend, packet{seq: bseq, body: buildBackendHandshakeResponse(fwd, backendCaps, user, cresp.body, plugin)}); err != nil {
+		return err
+	}
+
+	// 認証パケットの中継。OK / ERR で終わる
+	nonce := salt
+	for {
+		p, err := readPacket(backend)
+		if err != nil {
+			return fmt.Errorf("passthrough %s@%s: read backend auth: %w", user, branch, err)
+		}
+		bseq = p.seq
+		cseq++
+		switch {
+		case isOK(p.body):
+			s.limiter.Reset(src)
+			s.router.TouchConn(branch) // OK を返す前に記録する(方式A と同じ)
+			if err := writePacket(client, packet{seq: cseq, body: p.body}); err != nil {
+				return err
+			}
+			enableKeepAlive(backend)
+			_ = client.SetDeadline(time.Time{})
+			pipe(client, backend)
+			return nil
+		case isErr(p.body):
+			s.limiter.Fail(src)
+			_ = writePacket(client, packet{seq: cseq, body: p.body})
+			return fmt.Errorf("passthrough %s@%s: backend rejected: %s", user, branch, errText(p.body))
+		case len(p.body) == 2 && p.body[0] == 0x01 && p.body[1] == 0x03:
+			// caching_sha2 fast_auth_success: クライアントの応答は要らず、次に OK が来る
+			if err := writePacket(client, packet{seq: cseq, body: p.body}); err != nil {
+				return err
+			}
+		case clientTLS && len(p.body) == 2 && p.body[0] == 0x01 && p.body[1] == 0x04:
+			// full auth で、クライアント側が TLS のとき: クライアントは平文パスワードを
+			// 送ってくる(TLS なので正当)。backend 側は平文 TCP なので、そのまま渡すと
+			// backend が「secure connection が要る」と拒む。sashiki が RSA に詰め替える。
+			if err := writePacket(client, packet{seq: cseq, body: p.body}); err != nil {
+				return err
+			}
+			c, err := readPacket(client)
+			if err != nil {
+				return err
+			}
+			cseq = c.seq
+			pw := c.body
+			if n := len(pw); n > 0 && pw[n-1] == 0 {
+				pw = pw[:n-1]
+			}
+			if err := backendFullAuthRSAWith(backend, bseq+1, nonce, string(pw)); err != nil {
+				s.limiter.Fail(src)
+				return authErr(client, cseq+1, 1045, "28000",
+					fmt.Sprintf("Access denied for user '%s'@'%s' (using password: YES)", user, branch))
+			}
+			bseq += 2 // 公開鍵要求(+1)と暗号化パスワード(+2)を送った分
+		default:
+			// AuthMoreData(full auth 要求 / RSA 公開鍵)や AuthSwitchRequest:
+			// クライアントに渡し、その応答を backend に返す
+			if len(p.body) > 0 && p.body[0] == 0xfe {
+				_, nonce = parseAuthSwitch(p.body)
+			}
+			if err := writePacket(client, packet{seq: cseq, body: p.body}); err != nil {
+				return err
+			}
+			c, err := readPacket(client)
+			if err != nil {
+				return err
+			}
+			cseq = c.seq
+			bseq++
+			if err := writePacket(backend, packet{seq: bseq, body: c.body}); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // closeWriter は書き込み側だけを閉じられる接続(*net.TCPConn / *tls.Conn)。
@@ -414,6 +589,13 @@ func (s *Server) authenticateBackend(backend net.Conn, clientCaps uint32, databa
 // 要求(0x02)→ PEM 受領 → パスワード(null 終端)を nonce で XOR して RSA-OAEP で
 // 暗号化して送る(TLS 無しでも安全に送るための標準手順)。
 func (s *Server) backendFullAuthRSA(backend net.Conn, seq byte, nonce []byte) error {
+	return backendFullAuthRSAWith(backend, seq, nonce, s.cfg.AppPassword)
+}
+
+// backendFullAuthRSAWith は任意のパスワードで RSA full-auth を行う。passthrough(#394)で
+// クライアント側が TLS(平文パスワードが来る)・backend 側が平文 TCP のとき、
+// sashiki が RSA に詰め替えて渡すのに使う。
+func backendFullAuthRSAWith(backend net.Conn, seq byte, nonce []byte, password string) error {
 	if err := writePacket(backend, packet{seq: seq, body: []byte{0x02}}); err != nil {
 		return err
 	}
@@ -439,7 +621,7 @@ func (s *Server) backendFullAuthRSA(backend net.Conn, seq byte, nonce []byte) er
 	if len(nonce) == 0 {
 		return fmt.Errorf("empty auth nonce for backend full-auth")
 	}
-	plain := append([]byte(s.cfg.AppPassword), 0) // null 終端
+	plain := append([]byte(password), 0) // null 終端
 	xored := make([]byte, len(plain))
 	for i := range plain {
 		xored[i] = plain[i] ^ nonce[i%len(nonce)]
