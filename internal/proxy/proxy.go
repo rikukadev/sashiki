@@ -445,7 +445,7 @@ func (s *Server) authPassthrough(ctx context.Context, client net.Conn, hr handsh
 				return authErr(client, cseq+1, 1045, "28000",
 					fmt.Sprintf("Access denied for user '%s'@'%s' (using password: YES)", user, branch))
 			}
-			bseq += 2 // 公開鍵要求(+1)と暗号化パスワード(+2)を送った分
+			// backend 側の番号は次の readPacket で p.seq から取り直すので、ここで進める必要はない
 		default:
 			// AuthMoreData(full auth 要求 / RSA 公開鍵)や AuthSwitchRequest:
 			// クライアントに渡し、その応答を backend に返す
